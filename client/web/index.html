@@ -36,6 +36,7 @@
     color: #fff; background: var(--accent); border: 0; border-radius: .5rem;
   }
   button:disabled { opacity: .5; cursor: not-allowed; }
+  button.secondary { color: var(--accent); background: transparent; border: 1px solid var(--line); }
   .status { margin: 1rem 0 0; color: var(--muted); font-size: .9rem; min-height: 1.4em; }
   .status.error { color: var(--bad); }
   .served-by { margin: .35rem 0 0; color: var(--muted); font-size: .8rem; }
@@ -59,6 +60,9 @@
   .verdict { font-weight: 600; }
   .verdict.held { color: var(--ok); }
   .verdict.absent { color: var(--muted); }
+  .dir-head { display: flex; justify-content: space-between; gap: 1rem; align-items: baseline; }
+  .dir-title { font-weight: 700; }
+  .dir-state { color: var(--muted); font-size: .85rem; }
   .meta { margin-top: 1.1rem; padding-top: .9rem; border-top: 1px solid var(--line);
           color: var(--muted); font-size: .82rem; font-family: var(--mono); }
   .meta div { display: flex; justify-content: space-between; gap: 1rem; }
@@ -79,11 +83,20 @@
   <div class="row">
     <input id="address" type="text" spellcheck="false" autocomplete="off"
            placeholder="0x… (20-byte Ethereum address)">
+    <button id="sync" class="secondary" disabled>Sync</button>
     <button id="go" disabled>Look up</button>
   </div>
   <p id="status" class="status">Loading…</p>
   <p class="served-by">Answers come from <code id="endpoint">…</code>. It cannot see which
      address you ask about, but it does choose the balances it reports.</p>
+
+  <section id="directory" class="card" hidden>
+    <div class="dir-head">
+      <span class="dir-title">Directory</span>
+      <span class="dir-state" id="dir-state"></span>
+    </div>
+    <div class="meta" id="dir-meta"></div>
+  </section>
 
   <section id="result" class="card" hidden>
     <div class="addr" id="r-address"></div>
@@ -122,15 +135,37 @@ try {
 }
 
 try {
-  const s = await session.sync(say);
-  say(`Ready — ${s.addresses.toLocaleString()} addresses, index generation ${s.version}.`);
-  $('go').disabled = false;
+  await refreshStatus();
+  $('sync').disabled = false;
+  say('Ready to sync.');
 } catch (e) {
   say(`Could not reach the server: ${e.message}`, true);
 }
 
+$('sync').addEventListener('click', syncDirectory);
 $('go').addEventListener('click', run);
 $('address').addEventListener('keydown', (e) => { if (e.key === 'Enter') run(); });
+
+async function refreshStatus() {
+  const status = await session.status();
+  showDirectory(status);
+  $('go').disabled = !isCurrent(status);
+}
+
+async function syncDirectory() {
+  $('sync').disabled = true;
+  $('go').disabled = true;
+  try {
+    const s = await session.sync(say);
+    showDirectory(s);
+    $('go').disabled = false;
+    say(syncMessage(s));
+  } catch (e) {
+    say(e.message, true);
+  } finally {
+    $('sync').disabled = false;
+  }
+}
 
 async function run() {
   const address = $('address').value.trim();
@@ -139,15 +174,52 @@ async function run() {
   $('go').disabled = true;
   $('result').hidden = true;
   try {
-    await session.sync(say);
+    const status = await session.ensureCurrent();
+    showDirectory(status);
     const { report, timings, sizes } = await session.lookup(address, say);
     show(report, timings, sizes);
     say('Done. The server does not know which address this was.');
   } catch (e) {
     say(e.message, true);
   } finally {
-    $('go').disabled = false;
+    try {
+      await refreshStatus();
+    } catch {
+      $('go').disabled = true;
+    }
   }
+}
+
+function showDirectory(status) {
+  const local = session.localState;
+  $('directory').hidden = false;
+  $('dir-state').textContent = dirState(status, local);
+  $('dir-meta').innerHTML = [
+    ['server version', status.version],
+    ['local version', local.version ?? 'none'],
+    ['MPHF addresses', status.mphfLen.toLocaleString()],
+    ['MPHF size', fmtBytes(status.mphfBytes)],
+    ['tail addresses', status.tailLen.toLocaleString()],
+    ['tail size', fmtBytes(status.tailBytes)],
+    ['full directory', fmtBytes(status.directoryBytes)],
+  ].map(([k, v]) => `<div><span>${k}</span><span>${v}</span></div>`).join('');
+}
+
+function dirState(status, local) {
+  if (!local.ready) return 'not synced';
+  if (Number(local.version) !== Number(status.version)) return 'full sync needed';
+  if (local.tailLen < status.tailLen) return 'tail sync needed';
+  return 'current';
+}
+
+function isCurrent(status) {
+  return dirState(status, session.localState) === 'current';
+}
+
+function syncMessage(s) {
+  if (s.action === 'tail') return `Synced tail — ${s.tailLen.toLocaleString()} tail addresses.`;
+  if (s.action === 'full') return `Synced MPHF generation ${s.version}.`;
+  return 'Already current.';
 }
 
 function show(report, timings, sizes) {

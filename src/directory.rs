@@ -21,8 +21,14 @@ pub struct Directory {
     pub version: u64,
     /// Addresses addressed: MPHF base plus delta.
     pub len: usize,
+    /// Addresses addressed by the MPHF base, excluding the append-only tail.
+    pub mphf_len: usize,
+    /// Serialized MPHF bytes inside the full directory blob.
+    pub mphf_bytes: usize,
     /// Delta entries past the MPHF base.
     pub tail_len: usize,
+    /// Bytes returned by `/v1/directory/tail?from=0`.
+    pub tail_bytes: usize,
     pub full: Vec<u8>,
     parsed: KeywordDirectory<20>,
 }
@@ -30,10 +36,14 @@ pub struct Directory {
 impl Directory {
     pub fn from_blob(full: Vec<u8>) -> Result<Self> {
         let parsed = KeywordDirectory::<20>::read_from(&mut &full[..])?;
+        let tail_len = parsed.delta_len();
         Ok(Self {
             version: parsed.version(),
             len: parsed.len(),
-            tail_len: parsed.delta_len(),
+            mphf_len: parsed.mphf().len(),
+            mphf_bytes: mphf_bytes(full.len(), tail_len),
+            tail_len,
+            tail_bytes: tail_bytes(tail_len),
             full,
             parsed,
         })
@@ -54,11 +64,22 @@ impl Directory {
         Ok(Self {
             version: parsed.version(),
             len: 0,
+            mphf_len: 0,
+            mphf_bytes: mphf_bytes(full.len(), 0),
             tail_len: 0,
+            tail_bytes: tail_bytes(0),
             full,
             parsed,
         })
     }
+}
+
+fn mphf_bytes(full_bytes: usize, tail_len: usize) -> usize {
+    full_bytes.saturating_sub(24usize.saturating_add(20usize.saturating_mul(tail_len)))
+}
+
+fn tail_bytes(tail_len: usize) -> usize {
+    48usize.saturating_add(20usize.saturating_mul(tail_len))
 }
 
 pub fn handle(directory: Directory) -> Handle {

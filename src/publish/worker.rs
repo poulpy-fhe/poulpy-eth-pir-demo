@@ -55,15 +55,18 @@ impl PirWorker {
         server: &mut EthPirServer<UsdtUsdc>,
         updates: &Receiver<UpdateBatch>,
     ) -> bool {
-        match updates.recv_timeout(self.publish_wait()) {
-            Ok(batch) => {
-                self.absorb(server, batch);
-                true
+        loop {
+            let wait = self.publish_wait();
+            if wait.is_zero() {
+                return true;
             }
-            Err(RecvTimeoutError::Timeout) => true,
-            Err(RecvTimeoutError::Disconnected) => {
-                tracing::info!("syncer stopped; PIR thread exiting");
-                false
+            match updates.recv_timeout(wait) {
+                Ok(batch) => self.absorb(server, batch),
+                Err(RecvTimeoutError::Timeout) => return true,
+                Err(RecvTimeoutError::Disconnected) => {
+                    tracing::info!("syncer stopped; PIR thread exiting");
+                    return false;
+                }
             }
         }
     }
@@ -84,10 +87,13 @@ impl PirWorker {
         addr: eth_pir::Address,
         entry: Entry,
     ) {
-        if let Err(e) = server.update(addr, entry) {
-            tracing::error!("PIR update rejected: {e}");
-            return;
+        match server.update(addr, entry) {
+            Ok(()) => self.record_absorbed(addr, entry),
+            Err(e) => tracing::error!("PIR update rejected: {e}"),
         }
+    }
+
+    fn record_absorbed(&mut self, addr: eth_pir::Address, entry: Entry) {
         self.record_current_value(addr, entry);
         self.absorbed_since_publish += 1;
     }
@@ -107,7 +113,7 @@ impl PirWorker {
             Ok(None) => tracing::debug!("nothing pending; skipped a publish"),
             Err(e) => tracing::error!("publishing failed, keeping the current database: {e}"),
         }
-        self.last_publish = Instant::now();
+        self.last_publish = started;
     }
 
     fn record_publish(

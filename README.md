@@ -19,11 +19,12 @@ Current state:
 For local testing, run both sides with:
 
 ```sh
-ETH_RPC_URL=https://your-mainnet-rpc ./scripts/local-demo.sh
+./scripts/local-demo.sh
 ```
 
 That starts the backend on `127.0.0.1:8787` and a local portal on
-`127.0.0.1:8080`.
+`127.0.0.1:8080`. The script defaults to `https://rpc.ankr.com/eth`; override
+it with `ETH_RPC_URL=...` if you want a different mainnet RPC.
 
 ## Sync Model
 
@@ -70,8 +71,10 @@ RUSTFLAGS="-C target-feature=+avx2,+fma" \
   cargo build --release --features avx2-fhe
 ```
 
-The binary lands at `./target/release/usdt-pir`, which is how the examples below
-invoke it. To get `usdt-pir` on your `PATH` instead:
+The binary lands at `./target/release/usdt-pir`. Running that file directly does
+not rebuild it; for local testing, prefer `./scripts/run-release.sh ...`, which
+rebuilds first and then forwards the command. To get `usdt-pir` on your `PATH`
+instead:
 
 ```sh
 RUSTFLAGS="-C target-feature=+avx2,+fma" \
@@ -95,8 +98,7 @@ same `--state` will clobber each other's progress.
 Run the chain syncer only.
 
 ```sh
-export ETH_RPC_URL=https://...
-./target/release/usdt-pir follow --from-block finalized
+./scripts/run-release.sh follow --from-block finalized
 ```
 
 Useful flags:
@@ -116,9 +118,9 @@ Useful flags:
 Bring the snapshot up to date, then exit. This is the standalone catch-up.
 
 ```sh
-./target/release/usdt-pir sync                       # resume the snapshot -> finalized
-./target/release/usdt-pir sync --to latest           # to the head, reorg-exposed
-./target/release/usdt-pir sync --from 25735201       # replay a range
+./scripts/run-release.sh sync                       # resume the snapshot -> finalized
+./scripts/run-release.sh sync --to latest           # to the head, reorg-exposed
+./scripts/run-release.sh sync --from 25735201       # replay a range
 ```
 
 With an existing snapshot and no `--from`, it resumes at `cursor + 1`; `--to`
@@ -127,15 +129,16 @@ because balances are re-read as absolute values — replaying an old range does
 not restore old balances, it only refreshes addresses that moved in it.
 
 A long catch-up will meet a rate limit or a dropped connection, so a failed
-range is retried with backoff resuming from the cursor rather than the start.
+range is retried after a fixed short delay, resuming from the cursor rather than
+the start.
 Progress is saved after every attempt and again if the command gives up, so
 re-running always resumes.
 
 `--retries` (default 10) bounds *consecutive failures that advanced nothing*,
 not total failures. A throttled endpoint fails constantly while still moving the
 cursor hundreds of blocks at a time; counting those would abandon a range that
-was steadily completing. Each attempt that advances resets the counter and the
-backoff, and shortens what is left, so it still terminates.
+was steadily completing. Each attempt that advances resets the stalled counter
+and shortens what is left, so it still terminates.
 
 It does **not** check for reorgs: it has no previous block hash to compare
 against. Syncing to `finalized` makes that moot. `--to latest` warns, and any
@@ -147,10 +150,7 @@ moves again. Use `follow` or `serve` if you want the reorg tripwire.
 Run the syncer and keep an `eth-pir` database updated.
 
 ```sh
-RUSTFLAGS="-C target-feature=+avx2,+fma" \
-  cargo build --release --features avx2-fhe
-
-./target/release/usdt-pir serve --from-block finalized \
+./scripts/run-release.sh serve --from-block finalized \
   --confirmations 32 \
   --poll-interval 12 \
   --rebuild-every 30 \
@@ -159,8 +159,8 @@ RUSTFLAGS="-C target-feature=+avx2,+fma" \
 
 `serve` catches the snapshot up before building the PIR database. The PIR worker
 runs on a dedicated OS thread because rebuilds are CPU-bound. A transient RPC
-failure during catch-up is retried with backoff rather than propagated, so it
-cannot kill the process before the endpoint opens.
+failure during catch-up is retried after a fixed short delay rather than
+propagated, so it cannot kill the process before the endpoint opens.
 
 For the browser demo, keep the backend and portal as separate pieces. The
 portal serves `client/web` and proxies `/v1/*` to `127.0.0.1:8787`; browsers

@@ -214,7 +214,6 @@ async fn catch_up_before_publish<P: alloy::providers::Provider>(
     state: &Path,
     cfg: &FollowConfig,
 ) -> Result<()> {
-    let mut backoff = cfg.retry_base;
     let mut failures = 0u32;
     loop {
         match catch_up_once(provider, balances, state, cfg).await {
@@ -227,12 +226,11 @@ async fn catch_up_before_publish<P: alloy::providers::Provider>(
             Err(e) => {
                 failures += 1;
                 if failures >= 5 {
-                    tracing::error!(failures, cursor = balances.cursor, retry_in = ?backoff, "catch-up still failing: {e:#}");
+                    tracing::error!(failures, cursor = balances.cursor, retry_in = ?cfg.retry_base, "catch-up still failing: {e:#}");
                 } else {
-                    tracing::warn!(failures, cursor = balances.cursor, retry_in = ?backoff, "catch-up failed: {e:#}");
+                    tracing::warn!(failures, cursor = balances.cursor, retry_in = ?cfg.retry_base, "catch-up failed: {e:#}");
                 }
-                tokio::time::sleep(backoff).await;
-                backoff = crate::follow::next_backoff(backoff, cfg.retry_max);
+                tokio::time::sleep(cfg.retry_base).await;
             }
         }
     }

@@ -70,7 +70,7 @@ snapshot/PIR database, and serves `/v1/*`.
 From the repository root:
 
 ```sh
-ETH_RPC_URL=https://your-mainnet-rpc ./scripts/local-demo.sh
+./scripts/local-demo.sh
 ```
 
 That starts:
@@ -79,22 +79,20 @@ That starts:
 - portal page: <http://127.0.0.1:8080>
 
 The portal serves this directory and proxies `/v1/*` to the backend. The browser
-does not talk to the backend port directly.
+does not talk to the backend port directly. The script defaults to
+`https://rpc.ankr.com/eth`; set `ETH_RPC_URL=...` to use another mainnet RPC.
 
 Manual equivalent:
 
 ```sh
-RUSTFLAGS="-C target-feature=+avx2,+fma" \
-  cargo build --release --features avx2-fhe -p usdt-pir
-
-ETH_RPC_URL=https://... ./target/release/usdt-pir serve \
+./scripts/run-release.sh serve \
   --listen 127.0.0.1:8787
 ```
 
 For local single-process smoke tests, `serve --web client/web` still works:
 
 ```sh
-./target/release/usdt-pir serve --listen 127.0.0.1:8787 --web client/web
+./scripts/run-release.sh serve --listen 127.0.0.1:8787 --web client/web
 ```
 
 Then open <http://127.0.0.1:8787>.
@@ -183,14 +181,10 @@ response bytes and back to a decoded report, at a small PIR shape. No RPC, no
 ### 2. Start the private backend
 
 ```sh
-RUSTFLAGS="-C target-feature=+avx2,+fma" \
-  cargo build --release --features avx2-fhe -p usdt-pir
-
 ./client/build.sh web
 ./client/build.sh nodejs
 
-export ETH_RPC_URL=https://rpc.mevblocker.io
-./target/release/usdt-pir serve \
+./scripts/run-release.sh serve \
   --listen 127.0.0.1:8787 \
   --confirmations 32 --rebuild-every 30 --chunk 25
 ```

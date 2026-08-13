@@ -225,6 +225,50 @@ fn assert_new_tail_visible(client: &mut Client, server: &EthPirServer<UsdtUsdc>)
     }
 }
 
+#[test]
+fn a_reappearing_delta_address_reuses_its_slot() {
+    let _pir = exclusive();
+    let (config, layout) = shape();
+    let saved = holders(1..=20);
+    let mut server = boot(&saved).0;
+    server
+        .update(addr(21), entry(21))
+        .expect("append delta key");
+    server
+        .try_rebuild_database()
+        .expect("refresh")
+        .expect("pending");
+    let checkpoint = server.checkpoint().expect("checkpoint with delta");
+    drop(server);
+
+    let mut client = Client::with_shape(config, layout, &checkpoint.directory).expect("client");
+    let version_before = client.version();
+    let slot_before = client.slot(&hex(&addr(21))).expect("slot");
+
+    let (mut restarted, _) = EthPirServer::<UsdtUsdc>::restore_with(
+        config,
+        layout,
+        &checkpoint.directory,
+        &checkpoint.keys,
+        &saved,
+    )
+    .expect("restore with drained delta key");
+
+    restarted
+        .update(addr(21), entry(21))
+        .expect("reactivate delta key");
+    restarted
+        .try_rebuild_database()
+        .expect("refresh")
+        .expect("pending");
+
+    assert_eq!(client.version(), version_before);
+    assert_eq!(client.slot(&hex(&addr(21))).unwrap(), slot_before);
+    let report = ask(&mut client, &restarted, &addr(21));
+    assert!(report.held, "reactivated address must be visible");
+    assert_eq!(report.usdt.raw, entry(21).usdt);
+}
+
 /// The keys table describes one MPHF generation. Pairing it with a directory
 /// from another must fail loudly rather than scatter records.
 #[test]

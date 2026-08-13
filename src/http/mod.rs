@@ -142,13 +142,17 @@ async fn status(State(api): State<Api>) -> Response {
     let chain = api.progress.sample();
     let body = format!(
         concat!(
-            r#"{{"version":{},"len":{},"tailLen":{},"directoryBytes":{},"#,
+            r#"{{"version":{},"len":{},"mphfLen":{},"tailLen":{},"#,
+            r#""directoryBytes":{},"mphfBytes":{},"tailBytes":{},"#,
             r#""cursor":{},"tip":{},"lagBlocks":{},"lastSyncAgeSecs":{}}}"#
         ),
         dir.version,
         dir.len,
+        dir.mphf_len,
         dir.tail_len,
         dir.full.len(),
+        dir.mphf_bytes,
+        dir.tail_bytes,
         chain.cursor,
         chain.tip,
         chain.lag_blocks,

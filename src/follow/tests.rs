@@ -1,43 +1,8 @@
-use std::collections::HashSet;
-use std::time::Duration;
-
 use alloy::primitives::Address;
+use std::collections::HashSet;
 
 use super::*;
 use crate::follow::watch::ChainWatch;
-
-#[test]
-fn backoff_doubles_then_holds_at_the_ceiling() {
-    let cfg = FollowConfig::default();
-    let mut d = cfg.retry_base;
-    let mut seen = vec![d];
-    for _ in 0..12 {
-        d = loop_run::next_backoff(d, cfg.retry_max);
-        seen.push(d);
-    }
-    assert_eq!(
-        &seen[..5],
-        &[
-            Duration::from_secs(2),
-            Duration::from_secs(4),
-            Duration::from_secs(8),
-            Duration::from_secs(16),
-            Duration::from_secs(32),
-        ]
-    );
-    assert_eq!(*seen.last().unwrap(), cfg.retry_max);
-    assert!(seen.windows(2).all(|w| w[1] >= w[0]));
-}
-
-#[test]
-fn backoff_cannot_overflow_past_the_ceiling() {
-    assert_eq!(
-        loop_run::next_backoff(Duration::MAX, Duration::from_secs(300)),
-        Duration::from_secs(300)
-    );
-    let huge = Duration::MAX / 2 + Duration::from_secs(1);
-    assert_eq!(loop_run::next_backoff(huge, Duration::MAX), Duration::MAX);
-}
 
 #[test]
 fn tip_parses_confirmations_and_finalized() {

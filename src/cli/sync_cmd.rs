@@ -86,7 +86,6 @@ async fn run_sync<P: alloy::providers::Provider>(
     retries: u32,
 ) -> Result<crate::follow::SyncStats> {
     let mut total = crate::follow::SyncStats::default();
-    let mut backoff = cfg.retry_base;
     let mut stalled = 0u32;
     let mut start = from;
     let origin = balances.cursor;
@@ -100,18 +99,7 @@ async fn run_sync<P: alloy::providers::Provider>(
                 return Ok(total);
             }
             Err(e) => {
-                wait_to_retry(
-                    balances,
-                    state,
-                    cfg,
-                    to,
-                    before,
-                    retries,
-                    e,
-                    &mut stalled,
-                    &mut backoff,
-                )
-                .await?;
+                wait_to_retry(balances, state, cfg, to, before, retries, e, &mut stalled).await?;
                 start = balances.cursor + 1;
                 if start > to {
                     total.blocks = balances.cursor.saturating_sub(origin);
@@ -132,11 +120,10 @@ async fn wait_to_retry(
     retries: u32,
     error: anyhow::Error,
     stalled: &mut u32,
-    backoff: &mut Duration,
 ) -> Result<()> {
     save_failed_progress(balances, state);
     let advanced = balances.cursor.saturating_sub(before);
-    record_retry_progress(advanced, stalled, backoff, cfg.retry_base);
+    record_retry_progress(advanced, stalled);
     if *stalled > retries {
         return Err(error.context(format!(
             "giving up after {retries} attempt(s) with no progress at block {}; re-run to resume",
@@ -148,23 +135,16 @@ async fn wait_to_retry(
         stalled = *stalled,
         cursor = balances.cursor,
         remaining = to.saturating_sub(balances.cursor),
-        retry_in = ?backoff,
+        retry_in = ?cfg.retry_base,
         "sync interrupted: {error:#}"
     );
-    tokio::time::sleep(*backoff).await;
-    *backoff = crate::follow::next_backoff(*backoff, cfg.retry_max);
+    tokio::time::sleep(cfg.retry_base).await;
     Ok(())
 }
 
-fn record_retry_progress(
-    advanced: u64,
-    stalled: &mut u32,
-    backoff: &mut Duration,
-    retry_base: Duration,
-) {
+fn record_retry_progress(advanced: u64, stalled: &mut u32) {
     if advanced > 0 {
         *stalled = 0;
-        *backoff = retry_base;
     } else {
         *stalled += 1;
     }

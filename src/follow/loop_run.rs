@@ -22,30 +22,21 @@ pub async fn run<P: Provider>(
     updates: Option<&std::sync::mpsc::Sender<crate::publish::UpdateBatch>>,
 ) -> Result<()> {
     let mut last_snapshot = Instant::now();
-    let mut backoff = cfg.retry_base;
     let mut failures = 0u32;
     let mut state = PassState::default();
     loop {
         match pass(provider, map, cfg, &mut last_snapshot, &mut state, updates).await {
-            Ok(()) => on_success(map, cfg, &mut failures, &mut backoff).await,
-            Err(e) => {
-                on_failure(map, cfg, &mut last_snapshot, &mut failures, &mut backoff, e).await
-            }
+            Ok(()) => on_success(map, cfg, &mut failures).await,
+            Err(e) => on_failure(map, cfg, &mut last_snapshot, &mut failures, e).await,
         }
     }
 }
 
-async fn on_success(
-    map: &BalanceMap,
-    cfg: &FollowConfig,
-    failures: &mut u32,
-    backoff: &mut Duration,
-) {
+async fn on_success(map: &BalanceMap, cfg: &FollowConfig, failures: &mut u32) {
     if *failures > 0 {
         tracing::info!(failures = *failures, cursor = map.cursor, "recovered");
     }
     *failures = 0;
-    *backoff = cfg.retry_base;
     tokio::time::sleep(cfg.poll_interval).await;
 }
 
@@ -54,14 +45,12 @@ async fn on_failure(
     cfg: &FollowConfig,
     last_snapshot: &mut Instant,
     failures: &mut u32,
-    backoff: &mut Duration,
     error: anyhow::Error,
 ) {
     *failures += 1;
     snapshot_failed_progress(map, cfg, last_snapshot);
-    log_failure(map, *failures, *backoff, &error);
-    tokio::time::sleep(*backoff).await;
-    *backoff = next_backoff(*backoff, cfg.retry_max);
+    log_failure(map, *failures, cfg.retry_base, &error);
+    tokio::time::sleep(cfg.retry_base).await;
 }
 
 fn snapshot_failed_progress(map: &BalanceMap, cfg: &FollowConfig, last_snapshot: &mut Instant) {
@@ -72,16 +61,12 @@ fn snapshot_failed_progress(map: &BalanceMap, cfg: &FollowConfig, last_snapshot:
     }
 }
 
-fn log_failure(map: &BalanceMap, failures: u32, backoff: Duration, error: &anyhow::Error) {
+fn log_failure(map: &BalanceMap, failures: u32, retry_delay: Duration, error: &anyhow::Error) {
     if failures >= 5 {
-        tracing::error!(failures, cursor = map.cursor, retry_in = ?backoff, "sync pass still failing: {error:#}");
+        tracing::error!(failures, cursor = map.cursor, retry_in = ?retry_delay, "sync pass still failing: {error:#}");
     } else {
-        tracing::warn!(failures, cursor = map.cursor, retry_in = ?backoff, "sync pass failed: {error:#}");
+        tracing::warn!(failures, cursor = map.cursor, retry_in = ?retry_delay, "sync pass failed: {error:#}");
     }
-}
-
-pub fn next_backoff(current: Duration, max: Duration) -> Duration {
-    current.checked_mul(2).unwrap_or(max).min(max)
 }
 
 async fn pass<P: Provider>(

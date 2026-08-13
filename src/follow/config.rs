@@ -8,7 +8,6 @@ pub struct FollowConfig {
     pub snapshot_every: Duration,
     pub snapshot_path: PathBuf,
     pub retry_base: Duration,
-    pub retry_max: Duration,
     pub tip: crate::chain::Tip,
     pub reorg_window: u64,
     /// Where to publish how far behind we are. `None` outside `serve`.
@@ -23,7 +22,6 @@ impl Default for FollowConfig {
             snapshot_every: Duration::from_secs(600),
             snapshot_path: PathBuf::from("data/balances.snapshot"),
             retry_base: Duration::from_secs(2),
-            retry_max: Duration::from_secs(300),
             tip: crate::chain::Tip::Finalized,
             reorg_window: 64,
             progress: None,

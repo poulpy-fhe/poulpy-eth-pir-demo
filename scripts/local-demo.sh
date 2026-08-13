@@ -10,12 +10,8 @@ FROM_BLOCK=${USDT_PIR_FROM_BLOCK:-finalized}
 CONFIRMATIONS=${USDT_PIR_CONFIRMATIONS:-32}
 REBUILD_EVERY=${USDT_PIR_REBUILD_EVERY:-60}
 CHUNK=${USDT_PIR_CHUNK:-25}
-
-if [[ -z "${ETH_RPC_URL:-}" ]]; then
-  echo "ETH_RPC_URL is required, for example:" >&2
-  echo "  ETH_RPC_URL=https://your-mainnet-rpc ./scripts/local-demo.sh" >&2
-  exit 2
-fi
+ETH_RPC_URL=${ETH_RPC_URL:-https://rpc.ankr.com/eth}
+export ETH_RPC_URL
 
 cd "$ROOT"
 

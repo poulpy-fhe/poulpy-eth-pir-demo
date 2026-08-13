@@ -23,6 +23,15 @@ export class PirSession {
     return this.#client !== null;
   }
 
+  get localState() {
+    if (!this.#client) return { ready: false, version: null, tailLen: 0 };
+    return {
+      ready: true,
+      version: Number(this.#client.version),
+      tailLen: this.#client.tailLen,
+    };
+  }
+
   async status() {
     const res = await fetch(`${this.#base}/v1/status`);
     if (!res.ok) throw new Error(`status: ${res.status} ${await res.text()}`);
@@ -37,7 +46,7 @@ export class PirSession {
     if (!this.#client) {
       onProgress(`downloading directory (${fmtBytes(status.directoryBytes)})`);
       this.#client = new UsdtPirClient(await this.#bytes('/v1/directory'));
-      return { action: 'full', version: status.version, addresses: status.len };
+      return this.#syncResult('full', status);
     }
 
     const plan = this.#client.syncNeed(BigInt(status.version), status.tailLen);
@@ -48,7 +57,17 @@ export class PirSession {
       onProgress(`fetching ${status.tailLen - plan.from} new addresses`);
       this.#client.applyTail(await this.#bytes(`/v1/directory/tail?from=${plan.from}`));
     }
-    return { action: plan.action, version: status.version, addresses: status.len };
+    return this.#syncResult(plan.action, status);
+  }
+
+  async ensureCurrent() {
+    if (!this.#client) throw new Error('sync the directory first');
+    const status = await this.status();
+    const plan = this.#client.syncNeed(BigInt(status.version), status.tailLen);
+    if (plan.action !== 'up-to-date') {
+      throw new Error('directory is stale; sync before looking up');
+    }
+    return status;
   }
 
   /** Look up one address. Returns the decoded report plus timings. */
@@ -90,6 +109,19 @@ export class PirSession {
     const res = await fetch(`${this.#base}${path}`);
     if (!res.ok) throw new Error(`${path}: ${res.status} ${await res.text()}`);
     return new Uint8Array(await res.arrayBuffer());
+  }
+
+  #syncResult(action, status) {
+    return {
+      action,
+      version: status.version,
+      addresses: status.len,
+      mphfLen: status.mphfLen,
+      tailLen: status.tailLen,
+      directoryBytes: status.directoryBytes,
+      mphfBytes: status.mphfBytes,
+      tailBytes: status.tailBytes,
+    };
   }
 }
 
