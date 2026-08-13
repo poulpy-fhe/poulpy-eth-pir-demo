@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Private USDT/USDC balance lookup</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #14161a; --muted: #5c6370; --line: #e3e6ea;
+    --accent: #1a6ef5; --ok: #0d7a3e; --bad: #b3261e; --card: #f7f8fa;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14161a; --fg: #e8eaed; --muted: #9aa3ad; --line: #2a2e35;
+      --accent: #6ea8ff; --ok: #4ad07f; --bad: #ff8a80; --card: #1c1f25;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1rem; background: var(--bg); color: var(--fg);
+    font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 46rem; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin: 0 0 .35rem; letter-spacing: -.01em; }
+  .lede { color: var(--muted); margin: 0 0 1.75rem; }
+  .row { display: flex; gap: .6rem; flex-wrap: wrap; }
+  input[type=text] {
+    flex: 1 1 22rem; min-width: 0; padding: .7rem .8rem; font-family: var(--mono);
+    font-size: .95rem; color: var(--fg); background: var(--bg);
+    border: 1px solid var(--line); border-radius: .5rem;
+  }
+  input[type=text]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button {
+    padding: .7rem 1.1rem; font-size: .95rem; font-weight: 600; cursor: pointer;
+    color: #fff; background: var(--accent); border: 0; border-radius: .5rem;
+  }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .status { margin: 1rem 0 0; color: var(--muted); font-size: .9rem; min-height: 1.4em; }
+  .status.error { color: var(--bad); }
+  .served-by { margin: .35rem 0 0; color: var(--muted); font-size: .8rem; }
+  .served-by code { word-break: break-all; }
+  .card {
+    margin-top: 1.5rem; padding: 1.25rem; background: var(--card);
+    border: 1px solid var(--line); border-radius: .6rem;
+  }
+  .card[hidden] { display: none; }
+  .addr { font-family: var(--mono); font-size: .85rem; word-break: break-all; color: var(--muted); }
+  .balances { display: grid; grid-template-columns: auto 1fr auto; gap: .55rem 1.5rem; margin: 1rem 0 0; }
+  .balances .head { color: var(--muted); font-size: .72rem; letter-spacing: .06em;
+                    text-transform: uppercase; padding-bottom: .1rem;
+                    border-bottom: 1px solid var(--line); }
+  .balances .head.r { text-align: right; }
+  .sym { font-weight: 600; }
+  .amt { font-family: var(--mono); text-align: right; font-size: 1.05rem; }
+  .blk { font-family: var(--mono); text-align: right; font-size: .85rem; color: var(--muted);
+         white-space: nowrap; align-self: center; }
+  .blk.never { font-family: inherit; font-style: italic; }
+  .verdict { font-weight: 600; }
+  .verdict.held { color: var(--ok); }
+  .verdict.absent { color: var(--muted); }
+  .meta { margin-top: 1.1rem; padding-top: .9rem; border-top: 1px solid var(--line);
+          color: var(--muted); font-size: .82rem; font-family: var(--mono); }
+  .meta div { display: flex; justify-content: space-between; gap: 1rem; }
+  footer { margin-top: 2rem; color: var(--muted); font-size: .85rem; }
+  code { font-family: var(--mono); font-size: .85em; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Private balance lookup</h1>
+  <p class="lede">
+    Ask a server for an address's USDT and USDC balance without telling it which
+    address you asked about. The query is encrypted in your browser; the server
+    answers it without ever decrypting it.
+  </p>
+
+  <div class="row">
+    <input id="address" type="text" spellcheck="false" autocomplete="off"
+           placeholder="0x… (20-byte Ethereum address)">
+    <button id="go" disabled>Look up</button>
+  </div>
+  <p id="status" class="status">Loading…</p>
+  <p class="served-by">Answers come from <code id="endpoint">…</code>. It cannot see which
+     address you ask about, but it does choose the balances it reports.</p>
+
+  <section id="result" class="card" hidden>
+    <div class="addr" id="r-address"></div>
+    <p class="verdict" id="r-verdict"></p>
+    <div class="balances" id="r-balances"></div>
+    <div class="meta" id="r-meta"></div>
+  </section>
+
+  <footer>
+    <p>
+      Only the encrypted query is sent. It is a fixed size regardless of the
+      address, so its size reveals nothing.
+      The server's answer is checked against the address you asked for, so a
+      wrong record is rejected rather than displayed.
+    </p>
+  </footer>
+</main>
+
+<script type="module">
+import { PirSession, fmtBytes } from './pir.js';
+
+const $ = (id) => document.getElementById(id);
+
+const say = (msg, isError = false) => {
+  $('status').textContent = msg;
+  $('status').classList.toggle('error', isError);
+};
+
+let session;
+try {
+  session = new PirSession();
+  $('endpoint').textContent = session.endpoint;
+} catch (e) {
+  say(e.message, true);
+  throw e;
+}
+
+try {
+  const s = await session.sync(say);
+  say(`Ready — ${s.addresses.toLocaleString()} addresses, index generation ${s.version}.`);
+  $('go').disabled = false;
+} catch (e) {
+  say(`Could not reach the server: ${e.message}`, true);
+}
+
+$('go').addEventListener('click', run);
+$('address').addEventListener('keydown', (e) => { if (e.key === 'Enter') run(); });
+
+async function run() {
+  const address = $('address').value.trim();
+  if (!address) return;
+
+  $('go').disabled = true;
+  $('result').hidden = true;
+  try {
+    await session.sync(say);
+    const { report, timings, sizes } = await session.lookup(address, say);
+    show(report, timings, sizes);
+    say('Done. The server does not know which address this was.');
+  } catch (e) {
+    say(e.message, true);
+  } finally {
+    $('go').disabled = false;
+  }
+}
+
+function show(report, timings, sizes) {
+  $('r-address').textContent = report.address;
+
+  const verdict = $('r-verdict');
+  if (report.held) {
+    verdict.textContent = 'Held in the served set';
+    verdict.className = 'verdict held';
+  } else {
+    verdict.textContent = 'No USDT or USDC — this address is not in the served set';
+    verdict.className = 'verdict absent';
+  }
+
+  $('r-balances').innerHTML = report.held
+    ? '<span class="head">Token</span><span class="head r">Balance</span>' +
+      '<span class="head r">Last update</span>' +
+      [report.usdt, report.usdc].map((t) => `
+        <span class="sym">${t.symbol}</span>
+        <span class="amt">${Number(t.amount).toLocaleString(undefined, {
+          minimumFractionDigits: 6, maximumFractionDigits: 6 })}</span>
+        ${t.lastChangeBlock
+          ? `<span class="blk" title="Block at which this balance was last re-read">block ${t.lastChangeBlock.toLocaleString()}</span>`
+          : '<span class="blk never" title="Unchanged since this map started tracking; the balance is still current">never</span>'}`).join('')
+    : '';
+
+  $('r-meta').innerHTML = [
+    ['query sent', fmtBytes(sizes.query)],
+    ['response received', fmtBytes(sizes.response)],
+    ['encrypt', `${timings.encrypt.toFixed(0)} ms`],
+    ['server round trip', `${timings.roundTrip.toFixed(0)} ms`],
+    ['decrypt', `${timings.decrypt.toFixed(0)} ms`],
+  ].map(([k, v]) => `<div><span>${k}</span><span>${v}</span></div>`).join('');
+
+  $('result').hidden = false;
+}
+</script>
+</body>
+</html>

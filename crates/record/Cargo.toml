@@ -1,0 +1,10 @@
+[package]
+name = "usdt-pir-record"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+description = "The USDT/USDC PIR record layout, shared by the server and the client"
+license = "Apache-2.0"
+
+[dependencies]
+eth-pir = { path = "../../../eth-pir" }

@@ -1,0 +1,5 @@
+# Kept in sync with eth-pir / poulpy-pir: poulpy-hal uses #![feature(trait_alias)],
+# so the PIR half of this workspace requires nightly.
+[toolchain]
+channel = "nightly-2026-05-14"
+components = ["rustfmt", "clippy"]

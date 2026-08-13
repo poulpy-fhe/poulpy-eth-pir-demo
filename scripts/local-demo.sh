@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+BACKEND_ADDR=${USDT_PIR_BACKEND_ADDR:-127.0.0.1:8787}
+PORTAL_ADDR=${USDT_PIR_PORTAL_ADDR:-127.0.0.1:8080}
+STATE=${USDT_PIR_STATE:-data/balances.snapshot}
+KEYWORD=${USDT_PIR_KEYWORD:-data/keyword}
+FROM_BLOCK=${USDT_PIR_FROM_BLOCK:-finalized}
+CONFIRMATIONS=${USDT_PIR_CONFIRMATIONS:-32}
+REBUILD_EVERY=${USDT_PIR_REBUILD_EVERY:-60}
+CHUNK=${USDT_PIR_CHUNK:-25}
+
+if [[ -z "${ETH_RPC_URL:-}" ]]; then
+  echo "ETH_RPC_URL is required, for example:" >&2
+  echo "  ETH_RPC_URL=https://your-mainnet-rpc ./scripts/local-demo.sh" >&2
+  exit 2
+fi
+
+cd "$ROOT"
+
+if [[ "${USDT_PIR_SKIP_BUILD:-0}" != "1" ]]; then
+  RUSTFLAGS="${RUSTFLAGS:--C target-feature=+avx2,+fma}" \
+    cargo build --release --features avx2-fhe -p usdt-pir
+  ./client/build.sh web
+fi
+
+backend_args=(
+  serve
+  --state "$STATE"
+  --keyword "$KEYWORD"
+  --listen "$BACKEND_ADDR"
+  --confirmations "$CONFIRMATIONS"
+  --rebuild-every "$REBUILD_EVERY"
+  --chunk "$CHUNK"
+)
+
+if [[ ! -e "$STATE" ]]; then
+  backend_args+=(--from-block "$FROM_BLOCK")
+fi
+
+cleanup() {
+  jobs -pr | xargs -r kill
+}
+trap cleanup EXIT INT TERM
+
+echo "Starting backend on http://$BACKEND_ADDR"
+./target/release/usdt-pir "${backend_args[@]}" &
+
+echo "Starting local portal on http://$PORTAL_ADDR"
+python3 scripts/local_portal.py \
+  --listen "$PORTAL_ADDR" \
+  --backend "http://$BACKEND_ADDR" \
+  --web client/web &
+
+echo
+echo "Open http://$PORTAL_ADDR"
+echo "Press Ctrl-C to stop both processes."
+wait -n

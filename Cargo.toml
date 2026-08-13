@@ -1,0 +1,47 @@
+[workspace]
+members = ["client", "crates/record"]
+
+# Both patches exist so `client` can build for wasm32; see
+# ../poulpy-pir/vendor/ptr_hash/FORK.md.
+[patch."https://github.com/poulpy-fhe/poulpy-pir"]
+poulpy-pir = { path = "../poulpy-pir" }
+
+[patch.crates-io]
+ptr_hash = { path = "../poulpy-pir/vendor/ptr_hash" }
+
+[package]
+name = "usdt-pir"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+description = "CLI-based PIR over USDT/USDC balances on Ethereum mainnet"
+license = "Apache-2.0"
+
+[features]
+default = []
+# The FHE backend eth-pir serves from. The default is poulpy's portable
+# reference path, which is correct but dramatically slower — a real deployment
+# picks one of these and passes matching RUSTFLAGS, e.g.
+#   RUSTFLAGS="-C target-feature=+avx2,+fma" cargo build --release --features avx2-fhe
+avx2-fhe = ["eth-pir/avx2-fhe"]
+avx512-fhe = ["eth-pir/avx512-fhe"]
+
+[dependencies]
+# The PIR service layer. Brings in poulpy-pir and the FHE backends, which is
+# why this crate is pinned to nightly — see rust-toolchain.toml.
+eth-pir = { path = "../eth-pir" }
+usdt-pir-record = { path = "crates/record" }
+poulpy-pir = { version = "0.1.0", git = "https://github.com/poulpy-fhe/poulpy-pir", tag = "v0.1.0" }
+axum = "0.8"
+alloy = { version = "1.0", features = [
+    "provider-http",
+    "contract",
+    "sol-types",
+    "rpc-types-eth",
+] }
+clap = { version = "4", features = ["derive", "env"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "fs", "net"] }
+anyhow = "1"
+libc = "0.2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

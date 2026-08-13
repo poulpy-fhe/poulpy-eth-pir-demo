@@ -1,0 +1,25 @@
+[package]
+name = "usdt-pir-client"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+description = "WASM-compatible PIR client for USDT/USDC balance lookups"
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+avx2-fhe = ["eth-pir/avx2-fhe"]
+avx512-fhe = ["eth-pir/avx512-fhe"]
+
+[dependencies]
+eth-pir = { path = "../../eth-pir" }
+usdt-pir-record = { path = "../crates/record" }
+alloy-primitives = "1.6"
+poulpy-pir = { version = "0.1.0", git = "https://github.com/poulpy-fhe/poulpy-pir", tag = "v0.1.0" }
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+wasm-bindgen = "0.2.127"
+getrandom = { version = "0.4.3", features = ["wasm_js"] }
