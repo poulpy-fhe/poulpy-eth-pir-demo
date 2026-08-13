@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use alloy::providers::ProviderBuilder;
 use anyhow::Result;
@@ -7,6 +7,8 @@ use anyhow::Result;
 use crate::cli::args::Cmd;
 use crate::follow::FollowConfig;
 use crate::map::BalanceMap;
+
+use super::serve_config::{ServeArgs, Serving, pir_config, progress_config};
 
 pub async fn run(cmd: Cmd) -> Result<()> {
     let args = ServeArgs::take(cmd);
@@ -20,135 +22,6 @@ pub async fn run(cmd: Cmd) -> Result<()> {
     run_pir_loop(&provider, balances, cfg, progress, args.serving).await
 }
 
-struct ServeArgs {
-    rpc: String,
-    state: std::path::PathBuf,
-    from_block: Option<crate::cli::args::Target>,
-    follow: FollowArgs,
-    serving: Serving,
-}
-
-struct FollowArgs {
-    chunk: u64,
-    snapshot_every: u64,
-    confirmations: crate::chain::Tip,
-    reorg_window: u64,
-    poll_interval: u64,
-}
-
-impl ServeArgs {
-    fn take(cmd: Cmd) -> Self {
-        let Cmd::Serve {
-            rpc,
-            state,
-            from_block,
-            chunk,
-            snapshot_every,
-            confirmations,
-            reorg_window,
-            poll_interval,
-            rebuild_every,
-            compact_after,
-            keyword,
-            listen,
-            web,
-            batch_window,
-            max_batch,
-            queue_depth,
-            rate_limit,
-            rate_burst,
-        } = cmd
-        else {
-            unreachable!("serve_cmd only handles serve")
-        };
-        Self {
-            rpc,
-            state,
-            from_block,
-            follow: FollowArgs {
-                chunk,
-                snapshot_every,
-                confirmations,
-                reorg_window,
-                poll_interval,
-            },
-            serving: Serving::new(
-                rebuild_every,
-                compact_after,
-                keyword,
-                listen,
-                web,
-                batch_window,
-                max_batch,
-                queue_depth,
-                rate_limit,
-                rate_burst,
-            ),
-        }
-    }
-}
-
-fn progress_config(
-    follow: &FollowArgs,
-    state: std::path::PathBuf,
-) -> (FollowConfig, crate::progress::Handle) {
-    let mut cfg = super::commands::follow_config(
-        follow.chunk,
-        state,
-        follow.snapshot_every,
-        follow.confirmations,
-        follow.reorg_window,
-        follow.poll_interval,
-    );
-    let progress = crate::progress::handle();
-    cfg.progress = Some(progress.clone());
-    (cfg, progress)
-}
-
-/// Everything `serve` needs once the map is caught up.
-struct Serving {
-    rebuild_every: u64,
-    compact_after: usize,
-    keyword: std::path::PathBuf,
-    listen: Option<std::net::SocketAddr>,
-    web: Option<std::path::PathBuf>,
-    batch: crate::http::BatchConfig,
-    rate: crate::http::RateLimit,
-}
-
-impl Serving {
-    #[allow(clippy::too_many_arguments)]
-    fn new(
-        rebuild_every: u64,
-        compact_after: usize,
-        keyword: std::path::PathBuf,
-        listen: Option<std::net::SocketAddr>,
-        web: Option<std::path::PathBuf>,
-        batch_window: u64,
-        max_batch: usize,
-        queue_depth: usize,
-        rate_limit: u32,
-        rate_burst: u32,
-    ) -> Self {
-        Self {
-            rebuild_every,
-            compact_after,
-            keyword,
-            listen,
-            web,
-            batch: crate::http::BatchConfig {
-                window: Duration::from_millis(batch_window),
-                max: max_batch,
-                queue_depth,
-            },
-            rate: crate::http::RateLimit {
-                per_minute: rate_limit,
-                burst: rate_burst,
-            },
-        }
-    }
-}
-
 async fn run_pir_loop<P: alloy::providers::Provider>(
     provider: &P,
     mut balances: BalanceMap,
@@ -160,7 +33,12 @@ async fn run_pir_loop<P: alloy::providers::Provider>(
     let (tx, rx) = std::sync::mpsc::channel();
     let pir = crate::publish::spawn(
         &balances,
-        pir_config(rebuild_every, serving.compact_after, &serving.keyword),
+        pir_config(
+            rebuild_every,
+            serving.compact_after,
+            serving.compact_tail_percent,
+            &serving.keyword,
+        ),
         rx,
     )?;
 
@@ -191,18 +69,6 @@ async fn run_pir_loop<P: alloy::providers::Provider>(
     }
     let _ = pir.handle.join();
     outcome
-}
-
-fn pir_config(
-    rebuild_every: u64,
-    compact_after: usize,
-    keyword: &Path,
-) -> crate::publish::PirConfig {
-    crate::publish::PirConfig {
-        rebuild_every: Duration::from_secs(rebuild_every),
-        compact_after,
-        keyword: crate::keyword_store::Paths::new(keyword),
-    }
 }
 
 /// Retries instead of propagating: a transient RPC failure here would otherwise

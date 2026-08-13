@@ -186,7 +186,7 @@ response bytes and back to a decoded report, at a small PIR shape. No RPC, no
 
 ./scripts/run-release.sh serve \
   --listen 127.0.0.1:8787 \
-  --confirmations 32 --rebuild-every 30 --chunk 25
+  --confirmations 32 --rebuild-every 30 --compact-tail-percent 100 --chunk 25
 ```
 
 Wait for `PIR database ready` then `query endpoint listening`. From a cold

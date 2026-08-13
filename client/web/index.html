@@ -75,9 +75,9 @@
 <main>
   <h1>Private balance lookup</h1>
   <p class="lede">
-    Ask a server for an address's USDT and USDC balance without telling it which
-    address you asked about. The query is encrypted in your browser; the server
-    answers it without ever decrypting it.
+    Ask a server for an address's USDT and USDC balance held over the ETH mainnet
+    without telling it which address you asked about. The query is encrypted in 
+    your browser; the server answers it without ever decrypting it.
   </p>
 
   <div class="row">
@@ -116,7 +116,7 @@
 </main>
 
 <script type="module">
-import { PirSession, fmtBytes } from './pir.js';
+import { PirSession, fmtBytes } from './pir.js?v=2';
 
 const $ = (id) => document.getElementById(id);
 
@@ -191,7 +191,8 @@ async function run() {
 }
 
 function showDirectory(status) {
-  const local = session.localState;
+  status = normalizeStatus(status);
+  const local = localState();
   $('directory').hidden = false;
   $('dir-state').textContent = dirState(status, local);
   $('dir-meta').innerHTML = [
@@ -202,10 +203,13 @@ function showDirectory(status) {
     ['tail addresses', status.tailLen.toLocaleString()],
     ['tail size', fmtBytes(status.tailBytes)],
     ['full directory', fmtBytes(status.directoryBytes)],
+    ['network', 'Ethereum mainnet'],
+    ['DB update cadence', '~30 sec'],
   ].map(([k, v]) => `<div><span>${k}</span><span>${v}</span></div>`).join('');
 }
 
 function dirState(status, local) {
+  local ??= localState();
   if (!local.ready) return 'not synced';
   if (Number(local.version) !== Number(status.version)) return 'full sync needed';
   if (local.tailLen < status.tailLen) return 'tail sync needed';
@@ -213,13 +217,29 @@ function dirState(status, local) {
 }
 
 function isCurrent(status) {
-  return dirState(status, session.localState) === 'current';
+  return dirState(normalizeStatus(status), localState()) === 'current';
 }
 
 function syncMessage(s) {
   if (s.action === 'tail') return `Synced tail — ${s.tailLen.toLocaleString()} tail addresses.`;
   if (s.action === 'full') return `Synced MPHF generation ${s.version}.`;
   return 'Already current.';
+}
+
+function localState() {
+  return session.localState ?? { ready: session.ready, version: null, tailLen: 0 };
+}
+
+function normalizeStatus(status) {
+  const tailLen = status.tailLen ?? 0;
+  const tailBytes = status.tailBytes ?? (48 + 20 * tailLen);
+  return {
+    ...status,
+    mphfLen: status.mphfLen ?? Math.max(0, status.len - tailLen),
+    mphfBytes: status.mphfBytes ?? Math.max(0, status.directoryBytes - tailBytes),
+    tailLen,
+    tailBytes,
+  };
 }
 
 function show(report, timings, sizes) {
@@ -230,7 +250,7 @@ function show(report, timings, sizes) {
     verdict.textContent = 'Held in the served set';
     verdict.className = 'verdict held';
   } else {
-    verdict.textContent = 'No USDT or USDC — this address is not in the served set';
+    verdict.textContent = 'No USDT or USDC — this address is not in the served set or has a zero balance';
     verdict.className = 'verdict absent';
   }
 

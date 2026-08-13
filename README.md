@@ -154,6 +154,7 @@ Run the syncer and keep an `eth-pir` database updated.
   --confirmations 32 \
   --poll-interval 12 \
   --rebuild-every 30 \
+  --compact-tail-percent 100 \
   --listen 127.0.0.1:8787
 ```
 
@@ -172,6 +173,7 @@ Important flags:
 | --- | --- | --- |
 | `--rebuild-every` | `30` | Seconds between PIR database publishes. |
 | `--compact-after` | `200000` | New addresses before keyword index compaction. |
+| `--compact-tail-percent` | `100` | Compact when the tail download reaches this percentage of the MPHF blob. `0` disables this trigger. |
 | `--listen` | none | Private API bind address. Without it nothing can query. |
 | `--web` | none | Local single-process smoke test only. |
 | `--batch-window` | `1000` | Milliseconds to pool queries before one database pass. `0` answers each alone. |

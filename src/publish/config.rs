@@ -11,6 +11,9 @@ pub struct PirConfig {
     /// delta that every client must sync, at 20 B each. Compaction folds that
     /// back into the MPHF, and costs a full client resync.
     pub compact_after: usize,
+    /// Compact once the tail download reaches this percentage of the MPHF blob.
+    /// `0` disables the size-based trigger.
+    pub compact_tail_percent: usize,
     /// Where the keyword index is persisted, so a restart keeps every slot.
     pub keyword: crate::keyword_store::Paths,
 }
@@ -23,6 +26,7 @@ impl Default for PirConfig {
             // eth-pir measures the delta as cheaper up to ~212 K inserts
             // against a 4.05 MiB MPHF refetch.
             compact_after: 200_000,
+            compact_tail_percent: 100,
         }
     }
 }

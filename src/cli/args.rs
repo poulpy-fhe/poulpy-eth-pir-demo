@@ -120,6 +120,10 @@ pub enum Cmd {
         rebuild_every: u64,
         #[arg(long, default_value_t = 200_000)]
         compact_after: usize,
+        /// Compact when the tail download reaches this percentage of the MPHF
+        /// blob. 0 disables size-based compaction.
+        #[arg(long, default_value_t = 100)]
+        compact_tail_percent: usize,
         /// Base path for the persisted keyword index (`.index` and `.keys`).
         /// Keeping it lets a restart preserve every client's slots.
         #[arg(long, default_value = DEFAULT_KEYWORD)]

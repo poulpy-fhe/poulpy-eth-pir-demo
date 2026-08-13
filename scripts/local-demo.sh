@@ -8,7 +8,8 @@ STATE=${USDT_PIR_STATE:-data/balances.snapshot}
 KEYWORD=${USDT_PIR_KEYWORD:-data/keyword}
 FROM_BLOCK=${USDT_PIR_FROM_BLOCK:-finalized}
 CONFIRMATIONS=${USDT_PIR_CONFIRMATIONS:-32}
-REBUILD_EVERY=${USDT_PIR_REBUILD_EVERY:-60}
+REBUILD_EVERY=${USDT_PIR_REBUILD_EVERY:-30}
+COMPACT_TAIL_PERCENT=${USDT_PIR_COMPACT_TAIL_PERCENT:-100}
 CHUNK=${USDT_PIR_CHUNK:-25}
 ETH_RPC_URL=${ETH_RPC_URL:-https://rpc.ankr.com/eth}
 export ETH_RPC_URL
@@ -28,6 +29,7 @@ backend_args=(
   --listen "$BACKEND_ADDR"
   --confirmations "$CONFIRMATIONS"
   --rebuild-every "$REBUILD_EVERY"
+  --compact-tail-percent "$COMPACT_TAIL_PERCENT"
   --chunk "$CHUNK"
 )
 

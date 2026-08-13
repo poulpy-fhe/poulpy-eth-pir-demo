@@ -144,11 +144,63 @@ impl PirWorker {
     /// `.keys` half becomes stale and has to be rewritten.
     fn compact_if_needed(&mut self, server: &mut EthPirServer<UsdtUsdc>) -> bool {
         let delta = server.len().saturating_sub(self.len_at_compaction);
+        if !self.should_compact(server, delta) {
+            return false;
+        }
+        self.resync_from_current_map(server)
+    }
+
+    fn should_compact(&self, server: &EthPirServer<UsdtUsdc>, delta: usize) -> bool {
+        if self.count_threshold_met(delta) {
+            return true;
+        }
+        self.size_threshold_met(server, delta)
+    }
+
+    fn count_threshold_met(&self, delta: usize) -> bool {
         if delta < self.cfg.compact_after {
             return false;
         }
-        tracing::info!(delta, "rebuilding the keyword index; clients must resync");
-        self.resync_from_current_map(server)
+        tracing::info!(
+            delta,
+            compact_after = self.cfg.compact_after,
+            "rebuilding the keyword index; clients must resync"
+        );
+        true
+    }
+
+    fn size_threshold_met(&self, server: &EthPirServer<UsdtUsdc>, delta: usize) -> bool {
+        let Some(sizes) = self.keyword_sizes(server, delta) else {
+            return false;
+        };
+        if !tail_ratio_reached(
+            sizes.tail_bytes,
+            sizes.mphf_bytes,
+            self.cfg.compact_tail_percent,
+        ) {
+            return false;
+        }
+        tracing::info!(
+            delta,
+            tail_bytes = sizes.tail_bytes,
+            mphf_bytes = sizes.mphf_bytes,
+            compact_tail_percent = self.cfg.compact_tail_percent,
+            "rebuilding the keyword index; tail outgrew the MPHF threshold"
+        );
+        true
+    }
+
+    fn keyword_sizes(&self, server: &EthPirServer<UsdtUsdc>, delta: usize) -> Option<KeywordSizes> {
+        if delta == 0 || self.cfg.compact_tail_percent == 0 {
+            return None;
+        }
+        match read_keyword_sizes(server) {
+            Ok(sizes) => Some(sizes),
+            Err(e) => {
+                tracing::warn!("could not measure keyword sizes for compaction: {e}");
+                None
+            }
+        }
     }
 
     fn resync_from_current_map(&mut self, server: &mut EthPirServer<UsdtUsdc>) -> bool {
@@ -181,5 +233,45 @@ impl PirWorker {
             "rebuilt PIR database from the current holder map",
         );
         true
+    }
+}
+
+#[derive(Clone, Copy)]
+struct KeywordSizes {
+    mphf_bytes: usize,
+    tail_bytes: usize,
+}
+
+fn read_keyword_sizes(server: &EthPirServer<UsdtUsdc>) -> std::io::Result<KeywordSizes> {
+    let wire = server.keyword();
+    Ok(KeywordSizes {
+        mphf_bytes: wire.try_mphf()?.len(),
+        tail_bytes: wire.try_tail(0)?.len(),
+    })
+}
+
+fn tail_ratio_reached(tail_bytes: usize, mphf_bytes: usize, percent: usize) -> bool {
+    if percent == 0 || mphf_bytes == 0 {
+        return false;
+    }
+    (tail_bytes as u128) * 100 >= (mphf_bytes as u128) * (percent as u128)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tail_ratio_reached;
+
+    #[test]
+    fn tail_ratio_compacts_at_the_configured_percent() {
+        assert!(!tail_ratio_reached(999, 1_000, 100));
+        assert!(tail_ratio_reached(1_000, 1_000, 100));
+        assert!(tail_ratio_reached(2_000, 1_000, 200));
+        assert!(!tail_ratio_reached(1_999, 1_000, 200));
+    }
+
+    #[test]
+    fn tail_ratio_can_be_disabled() {
+        assert!(!tail_ratio_reached(usize::MAX, 1, 0));
+        assert!(!tail_ratio_reached(usize::MAX, 0, 100));
     }
 }
