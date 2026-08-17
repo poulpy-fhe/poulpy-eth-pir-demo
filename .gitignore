@@ -1,5 +1,6 @@
 /target
 /data
+.agents
 
 # Holds a live shared secret; copy from gateway.Caddyfile.example.
 /deploy/gateway.Caddyfile
