@@ -5,8 +5,9 @@ usage() {
   cat <<'EOF'
 Usage: ./scripts/run-ec2-demo.sh <ETH_MAINNET_RPC_URL> [3|4]
 
-On Debian/Ubuntu, builds the AVX-512 + CBLAS server (without NUMA
-interleaving), then starts it. A new state begins approximately 25 blocks / 5
+On Debian/Ubuntu, builds the AVX-512 + CBLAS server when AVX-512F is available,
+otherwise the AVX2 + CBLAS server (AVX2 and FMA are required). NUMA
+interleaving is disabled. A new state begins approximately 25 blocks / 5
 minutes behind the head. If the state already exists, it resumes it and does
 not pass --from-block.
 
@@ -65,12 +66,38 @@ if [[ ! -f ../eth-pir/Cargo.toml || ! -f ../poulpy-pir/Cargo.toml \
   echo "modified ../poulpy-pir (including vendor/ptr_hash) must be present" >&2
   exit 1
 fi
-for feature in avx2 fma avx512f; do
-  if ! grep -qw "$feature" /proc/cpuinfo; then
-    echo "CPU feature $feature is required but is not exposed by this instance" >&2
-    exit 1
+
+CPU_FLAGS=$(awk '/^flags[[:space:]]*:/ { print; exit }' /proc/cpuinfo)
+if [[ -z "$CPU_FLAGS" ]]; then
+  echo "could not read CPU feature flags from /proc/cpuinfo" >&2
+  exit 1
+fi
+
+cpu_has() {
+  [[ " $CPU_FLAGS " == *" $1 "* ]]
+}
+
+missing_features=()
+for feature in avx2 fma; do
+  if ! cpu_has "$feature"; then
+    missing_features+=("$feature")
   fi
 done
+if (( ${#missing_features[@]} > 0 )); then
+  echo "the optimized server requires AVX2 and FMA CPU support" >&2
+  echo "missing CPU features: ${missing_features[*]}" >&2
+  exit 1
+fi
+
+if cpu_has avx512f; then
+  SIMD_BACKEND="AVX-512"
+  FHE_FEATURE="avx512-fhe"
+  TARGET_FEATURES="+avx2,+fma,+avx512f"
+else
+  SIMD_BACKEND="AVX2"
+  FHE_FEATURE="avx2-fhe"
+  TARGET_FEATURES="+avx2,+fma"
+fi
 
 rpc_u64() {
   python3 - "$RPC_URL" "$1" <<'PY'
@@ -112,10 +139,10 @@ if ! dpkg-query -W -f='${Status}' libopenblas-pthread-dev 2>/dev/null \
   fi
 fi
 
-echo "Building AVX-512 + CBLAS server (NUMA DB interleaving disabled)..."
-RUSTFLAGS="-C target-cpu=native -C target-feature=+avx2,+fma,+avx512f" \
+echo "Building $SIMD_BACKEND + CBLAS server (NUMA DB interleaving disabled)..."
+RUSTFLAGS="-C target-cpu=native -C target-feature=$TARGET_FEATURES" \
   cargo build --release --locked --no-default-features \
-    --features "avx512-fhe,eth-pir/cblas-gemm" \
+    --features "$FHE_FEATURE,eth-pir/cblas-gemm" \
     -p usdt-pir
 
 # Poulpy otherwise uses the detected logical-CPU count. SMT measured worse for
