@@ -145,8 +145,8 @@ fsyncs the destination directory. It refuses an existing destination.
 When `USDT_PIR_STATE` exists, `scripts/run-ec2-demo.sh` resumes it without
 passing `--from-block`. If it is missing, the launcher falls back to an empty,
 non-authoritative map starting about 25 blocks behind the current head; that
-fallback learns only addresses that move afterward and remains explicitly
-marked as partial across restarts.
+fallback learns only addresses that move afterward and remains partial across
+restarts.
 
 ### `follow`
 
@@ -398,14 +398,15 @@ at load rather than served as a smaller, plausible holder set. The row count in
 the header is not trusted for allocation, so a corrupt header cannot drive an
 enormous reserve.
 
-Authoritative bootstrap snapshots use `USDTPIR3`. An explicitly empty
-near-head start uses checksummed `USDTPIP3`, preserving its non-authoritative
-provenance across saves and restarts; `serve` skips whole-token supply equality
-for that format but still validates rows, capacity, pinned targets, and hashes.
-Compatibility inspection/sync code can still load `USDTPIR2` with a warning.
-Bootstrap recovery and transfer installation require authoritative USDTPIR3;
-`serve` accepts strict USDTPIR3 or USDTPIP3. Both checksummed formats require
-exact framing, no duplicates, no zero/zero rows, and no trailing bytes.
+Checksummed snapshots use `USDTPIR3`. To support the explicitly empty near-head
+demo start and its later restarts, `serve` currently skips whole-token supply
+equality for every startup map. It still validates checked sums, rows, capacity,
+pinned targets, and hashes. The format does not encode whether a snapshot was
+bootstrapped, so an empty-start snapshot remains non-authoritative even after it
+has been saved. Compatibility inspection/sync code can still load `USDTPIR2`
+with a warning. `serve`, bootstrap recovery, and transfer installation require
+strict USDTPIR3: checksum, exact framing, no duplicates, no zero/zero rows, and
+no trailing bytes.
 
 ### One writer at a time
 

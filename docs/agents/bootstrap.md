@@ -583,20 +583,22 @@ The required order is:
 3. Strictly sync `C + 1..=S` in memory without saving any cursor above `C`.
    Startup catch-up is one validation unit; a crash repeats it from `C` rather
    than trusting a partially validated prefix.
-4. At `S`, collect checked total-supply results and run map validation. Load the
-   restored keyword artifacts, if any, and dry-run the same slot allocation
-   used by PIR construction, accounting for occupied/vacant slots plus holders
-   that would be appended. Record any semantic or capacity mismatch, but when
-   `S > C` do not classify it as deterministic until the next hash check.
-5. Immediately after completing all `S`-pinned validation RPCs, re-read the
+4. At `S`, run structural map and checked-sum validation. Load the restored
+   keyword artifacts, if any, and dry-run the same slot allocation used by PIR
+   construction, accounting for occupied/vacant slots plus holders that would
+   be appended. Record any semantic or capacity mismatch, but when `S > C` do
+   not classify it as deterministic until the next hash check. Whole-token
+   supply equality is intentionally not required by `serve` for now so an
+   explicitly partial empty-map start can be served and resumed.
+5. Immediately after completing validation, re-read the
    hash of `S` when `S > C`. An unavailable hash is retried without changing disk state. If
    a successfully read hash differs, discard the in-memory map, reload cursor
    `C`, and start a new startup attempt with a newly resolved target/hash. Never
    combine chunks from the two attempts. This prevents assembly across a fork
    while still treating state through trusted cursor `C` as final; repairing a
    reorganization at or before `C` remains out of scope. Only a matching final
-   hash makes any recorded supply, map, or capacity mismatch a deterministic
-   startup error.
+   hash makes any recorded map or capacity mismatch a deterministic startup
+   error.
 6. After the final hash matches and every recorded validation passes,
    atomically save the caught-up map with cursor `S`.
 7. Build the initial PIR database from the validated map and the already
@@ -608,11 +610,11 @@ The required order is:
    is aligned to 4 as specified below.
 
 Transient RPC failures while reaching or validating `S` are logged and retried
-with backoff while the in-memory catch-up unit is retained. A successfully read but
-unequal total supply, invalid map, or insufficient initial PIR capacity is a
-deterministic startup error; retrying it without a state or configuration change
-cannot make the initial database safe. On such an exit, the disk cursor remains
-exactly `C`, so a restart cannot trust newly caught-up but unvalidated state.
+with backoff while the in-memory catch-up unit is retained. An invalid map or
+insufficient initial PIR capacity is a deterministic startup error; retrying it
+without a state or configuration change cannot make the initial database safe.
+On such an exit, the disk cursor remains exactly `C`, so a restart cannot trust
+newly caught-up but unvalidated state.
 
 If `S == C`, skip catch-up and build the PIR database directly from the loaded
 snapshot after validation. As required above, `S < C` is an error: it indicates
@@ -705,7 +707,7 @@ a durable cursor from a signal handler or best-effort shutdown path.
 - Use strict reads for initial `serve` catch-up; a failed startup range remains
   uncommitted and is retried before the endpoint opens.
 - Pin startup catch-up target/hash `S`, use the loaded cursor `C`, reject
-  `S < C`, and validate the hash and supply/capacity at `S` before saving any
+  `S < C`, and validate the hash, map, and capacity at `S` before saving any
   cursor above `C` or building PIR.
 - Change the serve confirmation default to 4.
 - Update the EC2 launcher and README for the bootstrap-transfer-serve workflow.
@@ -770,12 +772,11 @@ Cover at least:
 - startup target `S` remaining pinned across catch-up retries;
 - start/end `S`-hash equality, with an unavailable hash retaining the attempt
   and a changed hash discarding it before a newly pinned attempt;
-- a supply mismatch accompanied by a changed `S` hash causing attempt discard,
-  not a deterministic validation exit;
+- a changed `S` hash causing the in-memory attempt to be discarded and repinned;
 - no-op catch-up only when `S == C`, and an error when `S < C`;
 - a catch-up crash or validation failure at `S` leaving the saved cursor exactly
   `C`, and saving `S` only after successful validation;
-- supply and actual restored-keyword capacity validation at `S`;
+- structural map and actual restored-keyword capacity validation at `S`;
 - interrupted snapshot transfer, strict temporary-file validation, lock
   contention with a running server, and destination-parent durability; and
 - PIR construction and endpoint startup only after catch-up succeeds.

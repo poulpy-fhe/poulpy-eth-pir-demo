@@ -157,7 +157,7 @@ async fn catch_up_before_publish<P: alloy::providers::Provider>(
                 from = trusted_cursor + 1,
                 to = target,
                 hash = %target_hash.expect("captured"),
-                "starting pinned authoritative catch-up"
+                "starting pinned startup catch-up"
             );
             if let Some(progress) = &cfg.progress {
                 progress.record(trusted_cursor, target);
@@ -184,11 +184,7 @@ async fn catch_up_before_publish<P: alloy::providers::Provider>(
             }
         }
 
-        let supplies = retry_startup(cfg, "reading startup total supplies", || {
-            crate::chain::read_total_supplies(provider, target)
-        })
-        .await;
-        let semantic = validate_startup_map(&balances, target, supplies);
+        let semantic = validate_startup_map(&balances, target);
         let allocation = crate::publish::validate_initial_allocation(
             &balances,
             &crate::keyword_store::Paths::new(keyword),
@@ -305,11 +301,7 @@ where
     }
 }
 
-fn validate_startup_map(
-    balances: &BalanceMap,
-    target: u64,
-    supplies: crate::chain::TotalSupplies,
-) -> Result<()> {
+fn validate_startup_map(balances: &BalanceMap, target: u64) -> Result<()> {
     anyhow::ensure!(
         balances.cursor == target,
         "startup map cursor is {}, expected {target}",
@@ -344,16 +336,6 @@ fn validate_startup_map(
             .checked_add(entry.usdc)
             .context("startup USDC sum overflow")?;
     }
-    anyhow::ensure!(
-        usdt == supplies.usdt,
-        "startup USDT sum {usdt} does not equal totalSupply {}",
-        supplies.usdt
-    );
-    anyhow::ensure!(
-        usdc == supplies.usdc,
-        "startup USDC sum {usdc} does not equal totalSupply {}",
-        supplies.usdc
-    );
     Ok(())
 }
 
@@ -379,7 +361,7 @@ fn validate_stamp(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::primitives::{B256, Bytes};
+    use alloy::primitives::B256;
     use alloy::providers::ProviderBuilder;
     use alloy::rpc::json_rpc::{RequestPacket, ResponsePacket};
     use alloy::rpc::types::eth::Block;
@@ -449,6 +431,20 @@ mod tests {
         map
     }
 
+    fn loaded_with_future_stamp(cursor: u64) -> BalanceMap {
+        let mut map = loaded(cursor);
+        map.seed(
+            alloy::primitives::Address::repeat_byte(0x31),
+            crate::map::Entry {
+                usdt: 10,
+                usdt_block: (cursor + 2) as u32,
+                usdc: 20,
+                usdc_block: (cursor - 1) as u32,
+            },
+        );
+        map
+    }
+
     fn config(state: &Path) -> FollowConfig {
         FollowConfig {
             chunk: 10,
@@ -464,12 +460,6 @@ mod tests {
         block.header.hash = hash;
         block.header.inner.number = number;
         block
-    }
-
-    fn word(value: u128) -> Bytes {
-        let mut bytes = [0u8; 32];
-        bytes[16..].copy_from_slice(&value.to_be_bytes());
-        Bytes::copy_from_slice(&bytes)
     }
 
     fn save_keyword_checkpoint(
@@ -533,16 +523,12 @@ mod tests {
         cursor: u64,
         initial_hash: B256,
         final_hash: B256,
-        usdt_supply: u128,
-        usdc_supply: u128,
     ) {
         let target = cursor + 1;
         asserter.push_success(&(target + 4));
         asserter.push_success(&Some(block(target, initial_hash)));
         asserter.push_success(&1u64);
         asserter.push_success(&Vec::<alloy::rpc::types::eth::Log>::new());
-        asserter.push_success(&word(usdt_supply));
-        asserter.push_success(&word(usdc_supply));
         asserter.push_success(&Some(block(target, final_hash)));
     }
 
@@ -591,7 +577,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn startup_saves_only_the_fully_validated_pinned_target() {
+    async fn startup_saves_pinned_target_without_total_supply_reads() {
         let root = root("commit");
         let state = root.join("state.snapshot");
         let original = loaded(20_000_000);
@@ -602,8 +588,6 @@ mod tests {
             original.cursor,
             B256::repeat_byte(0x11),
             B256::repeat_byte(0x11),
-            10,
-            20,
         );
         let provider = ProviderBuilder::new().connect_mocked_client(asserter);
         let caught_up = catch_up_before_publish(
@@ -623,7 +607,7 @@ mod tests {
     async fn deterministic_validation_failure_leaves_saved_cursor_at_c() {
         let root = root("validation-failure");
         let state = root.join("state.snapshot");
-        let original = loaded(20_000_000);
+        let original = loaded_with_future_stamp(20_000_000);
         original.save(&state).unwrap();
         let asserter = Asserter::new();
         push_successful_attempt(
@@ -631,8 +615,6 @@ mod tests {
             original.cursor,
             B256::repeat_byte(0x22),
             B256::repeat_byte(0x22),
-            11,
-            20,
         );
         let provider = ProviderBuilder::new().connect_mocked_client(asserter);
         let error = catch_up_before_publish(
@@ -644,7 +626,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(format!("{error:#}").contains("totalSupply"));
+        assert!(format!("{error:#}").contains("stamp"));
         assert_eq!(BalanceMap::load_strict(&state).unwrap().cursor, 20_000_000);
     }
 
@@ -660,11 +642,9 @@ mod tests {
             20_000_000,
             B256::repeat_byte(0x23),
             B256::repeat_byte(0x23),
-            11,
-            20,
         );
         let provider = ProviderBuilder::new().connect_mocked_client(first.clone());
-        let map = BalanceMap::load_strict(&state).unwrap();
+        let map = loaded_with_future_stamp(20_000_000);
         assert!(
             catch_up_before_publish(
                 &provider,
@@ -685,8 +665,6 @@ mod tests {
             20_000_000,
             B256::repeat_byte(0x24),
             B256::repeat_byte(0x24),
-            10,
-            20,
         );
         let provider = ProviderBuilder::new().connect_mocked_client(second.clone());
         let reopened = BalanceMap::load_strict(&state).unwrap();
@@ -719,8 +697,6 @@ mod tests {
         let asserter = Asserter::new();
         asserter.push_success(&(original.cursor + 4));
         asserter.push_success(&1u64);
-        asserter.push_success(&word(10));
-        asserter.push_success(&word(20));
         let provider = ProviderBuilder::new().connect_mocked_client(asserter.clone());
         let error = catch_up_before_publish(&provider, original, &state, &config(&state), &keyword)
             .await
@@ -734,7 +710,7 @@ mod tests {
     async fn production_run_does_not_bind_endpoint_before_catchup_validation() {
         let root = root("endpoint-before-catchup");
         let state = root.join("state.snapshot");
-        let original = loaded(20_000_000);
+        let original = loaded_with_future_stamp(20_000_000);
         original.save(&state).unwrap();
         let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let listen = reservation.local_addr().unwrap();
@@ -745,8 +721,6 @@ mod tests {
             original.cursor,
             B256::repeat_byte(0x25),
             B256::repeat_byte(0x25),
-            11,
-            20,
         );
         let provider = ProviderBuilder::new().connect_mocked_client(asserter.clone());
         let args = serve_args(state.clone(), root.join("keyword"), listen);
@@ -815,7 +789,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn changed_hash_discards_a_supply_mismatch_and_repins() {
+    async fn changed_hash_discards_the_attempt_and_repins() {
         let root = root("hash-change");
         let state = root.join("state.snapshot");
         let original = loaded(20_000_000);
@@ -826,15 +800,11 @@ mod tests {
             original.cursor,
             B256::repeat_byte(0x33),
             B256::repeat_byte(0x34),
-            999,
-            20,
         );
         // The next attempt resolves S == C: no hash or log request, but chain,
-        // supply, map and capacity validation still run.
+        // map and capacity validation still run.
         asserter.push_success(&(original.cursor + 4));
         asserter.push_success(&1u64);
-        asserter.push_success(&word(10));
-        asserter.push_success(&word(20));
         let provider = ProviderBuilder::new().connect_mocked_client(asserter.clone());
         let caught_up = catch_up_before_publish(
             &provider,
@@ -897,12 +867,7 @@ mod tests {
                 usdc_block: (target - 1) as u32,
             },
         );
-        validate_startup_map(
-            &map,
-            target,
-            crate::chain::TotalSupplies { usdt: 10, usdc: 20 },
-        )
-        .unwrap();
+        validate_startup_map(&map, target).unwrap();
     }
 
     #[tokio::test]
@@ -942,8 +907,6 @@ mod tests {
         asserter.push_success(&1u64);
         asserter.push_failure_msg("temporary startup log outage");
         asserter.push_success(&Vec::<alloy::rpc::types::eth::Log>::new());
-        asserter.push_success(&word(10));
-        asserter.push_success(&word(20));
         asserter.push_success(&Option::<Block>::None);
         asserter.push_success(&Some(block(target, hash)));
         let provider = ProviderBuilder::new().connect_mocked_client(asserter.clone());
