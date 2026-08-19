@@ -7,9 +7,9 @@ Usage: ./scripts/run-ec2-demo.sh <ETH_MAINNET_RPC_URL> [CONFIRMATIONS]
 
 On Debian/Ubuntu, builds the AVX-512 + CBLAS server when AVX-512F is available,
 otherwise the AVX2 + CBLAS server (AVX2 and FMA are required). NUMA
-interleaving is disabled. A complete USDTPIR3 snapshot produced by `bootstrap`
-must already exist at USDT_PIR_STATE; this launcher never starts an empty map
-and never passes --from-block.
+interleaving is disabled. If USDT_PIR_STATE exists, the launcher resumes it.
+Otherwise it starts an empty, explicitly partial holder map about 25 blocks
+behind the current head, as the launcher did before bootstrap support.
 
 Optional environment variables:
   USDT_PIR_STATE=PATH         Default: data/ec2-demo.snapshot
@@ -47,17 +47,6 @@ LISTEN=${USDT_PIR_BACKEND_ADDR:-127.0.0.1:8787}
 POLL_INTERVAL=${USDT_PIR_POLL_INTERVAL:-4}
 REBUILD_EVERY=${USDT_PIR_REBUILD_EVERY:-30}
 BATCH_WINDOW=${USDT_PIR_BATCH_WINDOW:-0}
-
-if [[ ! -e "$STATE" ]]; then
-  echo "required complete snapshot is missing: $STATE" >&2
-  echo >&2
-  echo "On an archive-RPC host, create it with:" >&2
-  echo "  usdt-pir bootstrap --rpc \"\$ETH_RPC_URL\" --confirmations $CONFIRMATIONS --state balances.snapshot" >&2
-  echo "Transfer it to this host under a staging name, then install it atomically:" >&2
-  echo "  usdt-pir install-snapshot --source /path/to/staged.snapshot --state \"$STATE\"" >&2
-  echo "Re-run this launcher after installation. The SQLite bootstrap cache is not transferred." >&2
-  exit 1
-fi
 
 export ETH_RPC_URL="$RPC_URL"
 export OPENBLAS_NUM_THREADS=1
@@ -172,7 +161,38 @@ if [[ ! "$PIR_THREADS" =~ ^[1-9][0-9]*$ ]]; then
 fi
 export PIR_THREADS
 
-echo "Resuming verified state: $STATE"
+from_args=()
+if [[ -e "$STATE" ]]; then
+  echo "Resuming existing state: $STATE"
+else
+  mapfile -t keyword_paths < <(
+    python3 - "$KEYWORD" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+print(path.with_suffix(".index"))
+print(path.with_suffix(".keys"))
+PY
+  )
+  if [[ -e "${keyword_paths[0]}" || -e "${keyword_paths[1]}" ]]; then
+    echo "state $STATE is new, but keyword files already exist:" >&2
+    echo "  ${keyword_paths[0]}" >&2
+    echo "  ${keyword_paths[1]}" >&2
+    echo "choose a fresh USDT_PIR_KEYWORD path or remove both files intentionally" >&2
+    exit 1
+  fi
+
+  # Ethereum slots are 12 seconds, so 25 blocks is approximately five minutes.
+  HEAD=$(rpc_u64 eth_blockNumber)
+  FROM_BLOCK=$((HEAD - 25))
+  from_args=(--from-block "$FROM_BLOCK")
+  echo "No state found at: $STATE"
+  echo "Head block: $HEAD"
+  echo "Starting fresh from block: $FROM_BLOCK"
+  echo "WARNING: this is an empty, partial holder map; it learns only addresses"
+  echo "that move from this block onward, not every existing USDT/USDC holder."
+fi
 
 echo "Confirmations: $CONFIRMATIONS"
 echo "Listening on: http://$LISTEN"
@@ -187,4 +207,5 @@ exec ./target/release/usdt-pir serve \
   --poll-interval "$POLL_INTERVAL" \
   --chunk 25 \
   --rebuild-every "$REBUILD_EVERY" \
-  --batch-window "$BATCH_WINDOW"
+  --batch-window "$BATCH_WINDOW" \
+  "${from_args[@]}"
