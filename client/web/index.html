@@ -76,7 +76,7 @@
   <h1>Private balance lookup</h1>
   <p class="lede">
     Ask a server for an address's USDT and USDC balance held over the ETH mainnet
-    without telling it which address you asked about. The query is encrypted in 
+    without telling it which address you asked about. The query is encrypted in
     your browser; the server answers it without ever decrypting it.
   </p>
 
@@ -178,7 +178,7 @@ async function run() {
     showDirectory(status);
     const { report, timings, sizes } = await session.lookup(address, say);
     show(report, timings, sizes);
-    say('Done. The server does not know which address this was.');
+    say('Done. The server never learnt your address.');
   } catch (e) {
     say(e.message, true);
   } finally {
