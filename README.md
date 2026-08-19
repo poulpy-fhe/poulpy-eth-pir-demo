@@ -186,7 +186,9 @@ Important flags:
 
 The browser portal calls same-origin `/v1/*`. For local testing,
 `scripts/local_portal.py` serves `client/web` and proxies those requests to the
-backend. The backend does not enable CORS.
+backend. A Netlify function provides the same proxy for the hosted portal; see
+[`client/README.md`](client/README.md#deploying-the-portal-on-netlify). The
+backend does not enable CORS.
 
 | Route | Returns |
 | --- | --- |

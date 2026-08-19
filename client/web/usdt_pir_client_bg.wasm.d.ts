@@ -1,0 +1,33 @@
+/* tslint:disable */
+/* eslint-disable */
+export const memory: WebAssembly.Memory;
+export const __wbg_get_query_bytes: (a: number) => [number, number];
+export const __wbg_get_query_id: (a: number) => number;
+export const __wbg_get_syncplan_action: (a: number) => [number, number];
+export const __wbg_query_free: (a: number, b: number) => void;
+export const __wbg_set_query_bytes: (a: number, b: number, c: number) => void;
+export const __wbg_set_query_id: (a: number, b: number) => void;
+export const __wbg_syncplan_free: (a: number, b: number) => void;
+export const __wbg_usdtpirclient_free: (a: number, b: number) => void;
+export const usdtpirclient_applyTail: (a: number, b: number, c: number) => [number, number];
+export const usdtpirclient_cancel: (a: number, b: number) => number;
+export const usdtpirclient_decode: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+export const usdtpirclient_new: (a: number, b: number) => [number, number, number];
+export const usdtpirclient_pendingCount: (a: number) => number;
+export const usdtpirclient_query: (a: number, b: number, c: number) => [number, number, number];
+export const usdtpirclient_resync: (a: number, b: number, c: number) => [number, number];
+export const usdtpirclient_slot: (a: number, b: number, c: number) => [number, number, number];
+export const usdtpirclient_syncNeed: (a: number, b: bigint, c: number) => number;
+export const usdtpirclient_tailLen: (a: number) => number;
+export const usdtpirclient_version: (a: number) => bigint;
+export const __wbg_get_syncplan_from: (a: number) => number;
+export const __wbg_set_syncplan_from: (a: number, b: number) => void;
+export const __wbg_set_syncplan_action: (a: number, b: number, c: number) => void;
+export const __wbindgen_exn_store: (a: number) => void;
+export const __externref_table_alloc: () => number;
+export const __wbindgen_externrefs: WebAssembly.Table;
+export const __wbindgen_free: (a: number, b: number, c: number) => void;
+export const __wbindgen_malloc: (a: number, b: number) => number;
+export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+export const __externref_table_dealloc: (a: number) => void;
+export const __wbindgen_start: () => void;

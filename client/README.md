@@ -65,6 +65,50 @@ This directory is the client side:
 The server side is the root crate under `src/`. It syncs Ethereum, owns the
 snapshot/PIR database, and serves `/v1/*`.
 
+## Deploying the portal on Netlify
+
+Netlify hosts the static browser client and a small same-origin proxy. The PIR
+server still runs separately: it needs the chain snapshot and roughly 14 GiB of
+memory, so it is not a Netlify function.
+
+1. Rebuild and commit the browser bundle when the Rust client changes:
+
+   ```sh
+   ./client/build.sh web
+   git add client/web/usdt_pir_client*
+   ```
+
+   These generated files are committed deliberately. A clean Netlify checkout
+   cannot rebuild them because this workspace uses sibling path dependencies
+   outside this repository.
+
+2. Import the repository as a Netlify site. The root [`netlify.toml`](../netlify.toml)
+   selects `client/web` as the publish directory and discovers the proxy
+   function automatically; no Netlify UI build settings are required.
+
+3. Add a site environment variable named `PIR_BACKEND_URL`, available to
+   Functions, then deploy. It should be the public backend origin, preferably
+   HTTPS, without `/v1`, a query, credentials, or a fragment:
+
+   ```text
+   PIR_BACKEND_URL=https://pir.example.com
+   ```
+
+   A deployment prefix is allowed (`https://example.com/pir`); the proxy appends
+   `/v1/...` to it. The browser still calls same-origin `/v1/*`, so the PIR
+   backend does not need CORS enabled.
+
+To exercise the same setup locally with the Netlify CLI:
+
+```sh
+PIR_BACKEND_URL=https://pir.example.com npx netlify dev
+```
+
+The current binary request and response sizes fit within Netlify Functions'
+payload limits. Be aware that the backend sees Netlify as the network peer, so
+its per-IP rate limit is shared by requests arriving through the proxy; tune the
+backend or put a trusted gateway in front of it for a multi-user deployment.
+
 ## Running locally
 
 From the repository root:
@@ -203,6 +247,9 @@ python3 scripts/local_portal.py \
   --web client/web
 ```
 
+`--backend` also accepts HTTPS origins and uses the scheme's default port when
+one is omitted, for example `--backend https://pir.example.com`.
+
 ### 4. Poke the backend with curl
 
 ```sh
@@ -268,6 +315,8 @@ hash so a regression fails there first.
 
 ```sh
 cargo test -p usdt-pir-client            # unit + directory + end-to-end
+node --test client/tools/netlify-proxy.test.mjs
+./client/netlify-build.sh                 # verify committed deploy assets
 ```
 
 `tests/end_to_end.rs` runs the real chain — server record, query bytes, response

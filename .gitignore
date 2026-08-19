@@ -4,9 +4,6 @@
 # Holds a live shared secret; copy from gateway.Caddyfile.example.
 /deploy/gateway.Caddyfile
 
-# wasm-bindgen output; regenerate with client/build.sh
+# The Node bundle stays local. The browser wasm-bindgen output is committed so
+# Netlify can publish it without the workspace's sibling Rust dependencies.
 /client/pkg-node/
-/client/web/usdt_pir_client.js
-/client/web/usdt_pir_client.d.ts
-/client/web/usdt_pir_client_bg.wasm
-/client/web/usdt_pir_client_bg.wasm.d.ts
