@@ -4,6 +4,10 @@ use anyhow::Result;
 use crate::cli::args::Cmd;
 
 pub async fn run(cmd: Cmd) -> Result<()> {
+    run_inner(cmd).await.map_err(crate::redact::error)
+}
+
+async fn run_inner(cmd: Cmd) -> Result<()> {
     let Cmd::Follow {
         rpc,
         state,
@@ -17,6 +21,7 @@ pub async fn run(cmd: Cmd) -> Result<()> {
     else {
         unreachable!("follow_cmd only handles follow")
     };
+    let state = crate::bootstrap::normalize_path(&state)?;
     let provider = ProviderBuilder::new().connect(&rpc).await?;
     let _lock = crate::map::SnapshotLock::acquire(&state)?;
     let mut balances = super::commands::open_map(&provider, &state, from_block).await?;

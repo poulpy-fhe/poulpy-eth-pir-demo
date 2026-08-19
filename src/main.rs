@@ -1,5 +1,6 @@
 //! CLI-based PIR over USDT/USDC balances on Ethereum mainnet.
 
+mod bootstrap;
 mod chain;
 mod cli;
 mod directory;
@@ -10,6 +11,7 @@ mod map;
 mod progress;
 mod publish;
 mod record;
+mod redact;
 mod tokens;
 
 use anyhow::Result;

@@ -12,19 +12,18 @@ Current state:
 - Client code lives in [`client/`](client/README.md): a transport-agnostic
   Rust/WASM client plus a small browser portal in `client/web`.
 - Shared record layout code lives in [`crates/record/`](crates/record).
-- A fresh empty map only tracks addresses that move after it starts, by design:
-  a full holder snapshot is imported separately, and syncing forward from a
-  chosen block is what this side has to get right.
+- `bootstrap` builds the complete starting holder snapshot from token deployment
+  history with a crash-resumable SQLite cache. `serve` owns all later updates.
 
-For local testing, run both sides with:
+After creating the complete snapshot described below, run both sides with:
 
 ```sh
 ./scripts/local-demo.sh
 ```
 
 That starts the backend on `127.0.0.1:8787` and a local portal on
-`127.0.0.1:8080`. The script defaults to `https://rpc.ankr.com/eth`; override
-it with `ETH_RPC_URL=...` if you want a different mainnet RPC.
+`127.0.0.1:8080`. It requires the snapshot at `USDT_PIR_STATE` and refuses an
+empty near-head start. Set `ETH_RPC_URL` to the desired mainnet serving RPC.
 
 ## Sync Model
 
@@ -84,14 +83,67 @@ RUSTFLAGS="-C target-feature=+avx2,+fma" \
 `serve` needs the AVX2 build; without `--features avx2-fhe` it falls back to
 poulpy's portable backend, which is correct but far slower. The other commands
 never touch the FHE path, so a plain `cargo build --release` is enough for
-`sync`, `follow`, `lookup`, `stat`, and `sample`.
+`bootstrap`, `install-snapshot`, `sync`, `follow`, `lookup`, `stat`, and
+`sample`.
 
 ## Commands
 
-All commands use `--rpc` or `ETH_RPC_URL`.
+RPC-backed commands use `--rpc` or `ETH_RPC_URL`.
 The default snapshot path is `data/balances.snapshot`.
-Only one process may write a given snapshot at a time — two syncs against the
-same `--state` will clobber each other's progress.
+Only one process may write a given snapshot at a time. Writers take a shared
+advisory lock, so a second process targeting the same normalized `--state` is
+refused.
+
+### `bootstrap`
+
+Create the one complete starting snapshot with a coherent Ethereum-mainnet
+archive RPC:
+
+```sh
+usdt-pir bootstrap \
+  --rpc "$ETH_RPC_URL" \
+  --confirmations 4 \
+  --state data/balances.snapshot \
+  --chunk 10000 \
+  --retries 10
+```
+
+At startup it resolves `T = head - confirmations` once and pins both `T` and
+its hash. It scans USDT/USDC logs from USDT deployment block 4,634,748 through
+`T` inclusive, records every possible holder, reads both absolute balances
+through Multicall3 at `T`, validates token totals and PIR capacity, then writes
+a strict checksummed USDTPIR3 snapshot with cursor `T`.
+
+The default cache is `<complete-state-name>.bootstrap.sqlite`, for example
+`balances.snapshot.bootstrap.sqlite`. SQLite WAL/FULL transactions preserve
+each completed range and balance batch across crashes. Re-running resumes the
+pinned target; `--chunk` and `--retries` may change, but `--confirmations` may
+not. The cache is removed only after the snapshot has been saved and reloaded
+exactly. Pass `--keep-cache` to retain a completed cache for diagnostics.
+
+`--retries N` permits N additional attempts after the first failure of the same
+stalled unit. Provider-cap narrowing and Multicall splitting do not consume the
+budget. Bootstrap refuses every existing state file unless a matching
+`ReadyToCommit` or retained `Complete` cache proves exact row-by-row equality;
+there is no force-overwrite mode. It is bounded and one-shot—`serve` handles
+every block after `T`.
+
+### Snapshot transfer
+
+Transfer only the completed `.snapshot` file to the PIR host; its SQLite cache
+is not needed. Upload under a staging name, stop `serve`, then install it:
+
+```sh
+usdt-pir install-snapshot \
+  --source /path/to/staged.snapshot \
+  --state data/ec2-demo.snapshot
+```
+
+The installer takes the same lock as `serve`, copies to a unique temporary file
+beside the destination, fsyncs it, strictly validates USDTPIR3, renames it, and
+fsyncs the destination directory. It refuses an existing destination.
+`scripts/run-ec2-demo.sh` also refuses a missing snapshot and prints transfer
+instructions; it never passes `--from-block`.
 
 ### `follow`
 
@@ -150,18 +202,24 @@ moves again. Use `follow` or `serve` if you want the reorg tripwire.
 Run the syncer and keep an `eth-pir` database updated.
 
 ```sh
-./scripts/run-release.sh serve --from-block finalized \
-  --confirmations 32 \
+./scripts/run-release.sh serve \
+  --confirmations 4 \
   --poll-interval 12 \
   --rebuild-every 30 \
   --compact-tail-percent 100 \
   --listen 127.0.0.1:8787
 ```
 
-`serve` catches the snapshot up before building the PIR database. The PIR worker
-runs on a dedicated OS thread because rebuilds are CPU-bound. A transient RPC
-failure during catch-up is retried after a fixed short delay rather than
-propagated, so it cannot kill the process before the endpoint opens.
+`serve` strictly loads USDTPIR3 at cursor `C`, pins one startup target `S`, and
+syncs `C + 1..=S` in memory. It validates the target hash, both total supplies,
+the map, and the restored-keyword slot allocation before saving cursor `S`,
+building PIR, or opening the endpoint. A failed or reorged attempt leaves disk
+at exactly `C`; transient RPC errors retry the pinned attempt. `S < C` is
+refused. The numeric confirmation default is 4.
+
+After the endpoint opens, the existing continuous follower and PIR publication
+behavior take over unchanged. The PIR worker uses a dedicated OS thread because
+rebuilds are CPU-bound.
 
 For the browser demo, keep the backend and portal as separate pieces. The
 portal serves `client/web` and proxies `/v1/*` to `127.0.0.1:8787`; browsers
@@ -214,8 +272,8 @@ flat if the tip stops being fetched at all.
 
 `lastSyncAgeSecs` is `null`, not `0`, before the first pass completes: "never
 synced" and "synced a moment ago" must not look alike. `lagBlocks` is the gap to
-the tip the syncer was aiming at, so under `--confirmations 32` it sits at about
-32 when healthy, not 0.
+the tip the syncer was aiming at, so under the default `--confirmations 4` it
+sits at about 4 when healthy, not 0.
 
 The directory the endpoint serves is a copy published by the PIR thread after
 each rebuild, so serving never waits on one. It is published *after* the rebuild
@@ -293,7 +351,8 @@ Inspect the local snapshot. These commands are not private.
 `--confirmations finalized` reads finalized blocks only. This is about 13
 minutes behind the head and does not need reorg repair.
 
-`--confirmations N` reads block `head - N`. This gives fresher data. Reorgs are
+`--confirmations N` reads exactly block `head - N`; N must be positive and the
+subtraction is checked. This gives fresher data. Reorgs are
 detected by checking the last synced block hash. If the hash changed, the syncer
 rewinds up to `--reorg-window` blocks and re-reads affected addresses.
 
@@ -302,18 +361,17 @@ rewinds up to `--reorg-window` blocks and re-reads affected addresses.
 The RPC endpoint must be Ethereum mainnet. The program checks `eth_chainId == 1`
 before touching the snapshot.
 
-The endpoint must serve:
+Bootstrap's endpoint must provide a coherent archive view and serve:
 
-- historical logs for the synced range
-- historical state for `balanceOf` at each chunk end
+- complete historical logs from USDT deployment block 4,634,748 onward
+- historical USDT `owner()` state at Issue/Redeem event blocks
+- block hashes for the pinned target
+- Multicall3 plus both tokens' `balanceOf` and `totalSupply` state at `T`
 
-Many free endpoints do not provide enough history. `preflight` checks this
-before a long sync starts.
-
-Full historical backfill cannot use this path from genesis. Balance reads are
-batched through Multicall3, which exists on mainnet from block `14,353,601`.
-USDC and USDT are older. Use an external bootstrap snapshot for older history,
-then sync forward.
+Bootstrap reads old logs directly but uses Multicall3 only at the modern target,
+so Multicall3 need not exist at the scan start. Successful `eth_getLogs`
+responses cannot prove a provider did not silently truncate; use a trusted
+archive RPC. Normal tests use deterministic mocks and remain offline.
 
 ## Snapshot
 
@@ -337,12 +395,14 @@ at load rather than served as a smaller, plausible holder set. The row count in
 the header is not trusted for allocation, so a corrupt header cannot drive an
 enormous reserve.
 
-`USDTPIR2` files (no checksum) still load, with a warning, and are rewritten as
-`USDTPIR3` on the next save.
+Compatibility inspection/sync code can still load `USDTPIR2` with a warning,
+but `serve`, bootstrap recovery, and transfer installation require strict
+USDTPIR3: checksum, exact framing, no duplicates, no zero/zero rows, and no
+trailing bytes.
 
 ### One writer at a time
 
-`follow`, `sync`, and `serve` take an exclusive `flock` on
+`bootstrap`, `install-snapshot`, `follow`, `sync`, and `serve` take an exclusive `flock` on
 `<snapshot>.lock` at startup, and refuse to run if another process holds it:
 
 ```
@@ -408,9 +468,8 @@ fork. Both are required for the client to build for wasm32.
 
 ## Missing
 
-- An `ingest` command to load an externally-produced holder snapshot. Until then
-  a map starts empty and fills in as addresses move, so a well-known wallet
-  reads as "not held" until it next transacts.
+- Snapshot provenance inside USDTPIR3 or a sidecar manifest. `serve` trusts the
+  operator provenance of an otherwise strictly validated snapshot.
 - Large-scale validation of keyword index compaction. It is wired to
   `--compact-after` but has never run at a 200 K delta.
 - Authentication on the endpoint. Rate limiting exists; anyone who can reach the

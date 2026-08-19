@@ -17,13 +17,25 @@ use anyhow::{Context, Result};
 /// Held for as long as the process may write the snapshot.
 #[derive(Debug)]
 pub struct SnapshotLock {
-    _file: std::fs::File,
+    _lock: AdvisoryLock,
 }
 
 impl SnapshotLock {
     /// Take the lock for `snapshot`, or fail if another process holds it.
     pub fn acquire(snapshot: &Path) -> Result<Self> {
         let path = lock_path(snapshot);
+        AdvisoryLock::acquire(&path, &format!("writing {snapshot:?}")).map(|_lock| Self { _lock })
+    }
+}
+
+/// A non-blocking advisory lock for another single-owner artifact.
+#[derive(Debug)]
+pub(crate) struct AdvisoryLock {
+    _file: std::fs::File,
+}
+
+impl AdvisoryLock {
+    pub(crate) fn acquire(path: &Path, activity: &str) -> Result<Self> {
         if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
             std::fs::create_dir_all(dir)?;
         }
@@ -31,7 +43,7 @@ impl SnapshotLock {
             .create(true)
             .truncate(false)
             .write(true)
-            .open(&path)
+            .open(path)
             .with_context(|| format!("opening {path:?}"))?;
 
         // SAFETY: `file` owns a live descriptor for the duration of the call.
@@ -40,26 +52,31 @@ impl SnapshotLock {
             let err = std::io::Error::last_os_error();
             anyhow::ensure!(
                 err.kind() != std::io::ErrorKind::WouldBlock,
-                "another process is already writing {snapshot:?} (lock {path:?}). \
-                 Stop it first, or pass a different --state.",
+                "another process is already {activity} (lock {path:?})",
             );
             return Err(err).with_context(|| format!("locking {path:?}"));
         }
 
-        tracing::debug!("holding the snapshot write lock at {path:?}");
+        tracing::debug!("holding advisory lock at {path:?}");
         Ok(Self { _file: file })
     }
 }
 
-fn lock_path(snapshot: &Path) -> PathBuf {
-    let mut name = snapshot.file_name().unwrap_or_default().to_os_string();
-    name.push(".lock");
-    snapshot.with_file_name(name)
+pub(crate) fn lock_path(snapshot: &Path) -> PathBuf {
+    appended_path(snapshot, ".lock")
+}
+
+pub(crate) fn appended_path(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(suffix);
+    path.with_file_name(name)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const LOCK_PROBE_PATH: &str = "USDT_PIR_TEST_CONTENDED_LOCK_PATH";
 
     fn tmp(name: &str) -> PathBuf {
         let mut p = std::env::temp_dir();
@@ -99,6 +116,39 @@ mod tests {
         assert!(
             format!("{err:#}").contains("already writing"),
             "message should name the problem: {err:#}"
+        );
+    }
+
+    #[test]
+    fn child_process_lock_probe() {
+        let Some(snapshot) = std::env::var_os(LOCK_PROBE_PATH) else {
+            return;
+        };
+        let snapshot = PathBuf::from(snapshot);
+        let error = SnapshotLock::acquire(&snapshot).expect_err("parent must hold the lock");
+        assert!(
+            format!("{error:#}").contains("already writing"),
+            "child should observe process-level contention: {error:#}"
+        );
+    }
+
+    #[test]
+    fn another_process_is_refused_while_the_lock_lives() {
+        let snapshot = tmp("cross-process");
+        let _held = SnapshotLock::acquire(&snapshot).expect("parent lock");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("map::lock::tests::child_process_lock_probe")
+            .arg("--exact")
+            .arg("--nocapture")
+            .env(LOCK_PROBE_PATH, &snapshot)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "child lock probe failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 }

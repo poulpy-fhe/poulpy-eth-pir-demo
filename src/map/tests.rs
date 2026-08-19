@@ -120,7 +120,7 @@ fn snapshot_roundtrips_entries_and_cursor() {
 
 fn populated_map() -> BalanceMap {
     let mut m = BalanceMap::new(21_000_000);
-    for i in 0..1000u32 {
+    for i in 1..=1000u32 {
         let mut raw = [0u8; 20];
         raw[..4].copy_from_slice(&i.to_be_bytes());
         m.apply(
@@ -226,4 +226,82 @@ fn an_absurd_row_count_does_not_allocate() {
 
     let err = BalanceMap::load(&path).expect_err("must fail on the short read");
     assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof, "{err}");
+}
+
+#[test]
+fn strict_loader_refuses_legacy_checksumless_state() {
+    let path = std::env::temp_dir().join("usdt_pir_legacy_strict.bin");
+    populated_map().save(&path).unwrap();
+    let mut bytes = std::fs::read(&path).unwrap();
+    bytes[..8].copy_from_slice(b"USDTPIR2");
+    bytes.truncate(bytes.len() - 8);
+    std::fs::write(&path, bytes).unwrap();
+    assert!(
+        BalanceMap::load(&path).is_ok(),
+        "compatibility loader remains available"
+    );
+    let error = BalanceMap::load_strict(&path).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(format!("{error}").contains("checksumless"));
+}
+
+#[test]
+fn strict_loader_refuses_duplicate_zero_and_trailing_rows() {
+    let root = std::env::temp_dir().join(format!("usdt-pir-strict-{}", std::process::id()));
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::create_dir_all(&root).unwrap();
+
+    let duplicate = root.join("duplicate.snapshot");
+    populated_map().save(&duplicate).unwrap();
+    let mut bytes = std::fs::read(&duplicate).unwrap();
+    let first_address = bytes[24..24 + 20].to_vec();
+    bytes[24 + 60..24 + 60 + 20].copy_from_slice(&first_address);
+    std::fs::write(&duplicate, bytes).unwrap();
+    let error = BalanceMap::load_strict(&duplicate).unwrap_err();
+    assert!(format!("{error}").contains("duplicate"));
+
+    let zero = root.join("zero.snapshot");
+    populated_map().save(&zero).unwrap();
+    let mut bytes = std::fs::read(&zero).unwrap();
+    bytes[24 + 20..24 + 36].fill(0);
+    bytes[24 + 40..24 + 56].fill(0);
+    std::fs::write(&zero, bytes).unwrap();
+    let error = BalanceMap::load_strict(&zero).unwrap_err();
+    assert!(format!("{error}").contains("zero/zero"));
+
+    let zero_address = root.join("zero-address.snapshot");
+    populated_map().save(&zero_address).unwrap();
+    let mut bytes = std::fs::read(&zero_address).unwrap();
+    bytes[24..24 + 20].fill(0);
+    std::fs::write(&zero_address, bytes).unwrap();
+    let error = BalanceMap::load_strict(&zero_address).unwrap_err();
+    assert!(format!("{error}").contains("zero address"));
+
+    let trailing = root.join("trailing.snapshot");
+    populated_map().save(&trailing).unwrap();
+    use std::io::Write as _;
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&trailing)
+        .unwrap()
+        .write_all(b"junk")
+        .unwrap();
+    let error = BalanceMap::load_strict(&trailing).unwrap_err();
+    assert!(format!("{error}").contains("trailing"));
+}
+
+#[test]
+fn atomic_writer_does_not_use_extension_replacing_temp_names() {
+    let root = std::env::temp_dir().join(format!("usdt-pir-temp-name-{}", std::process::id()));
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::create_dir_all(&root).unwrap();
+    let first = root.join("balances.one");
+    let second = root.join("balances.two");
+    let old_colliding_temp = root.join("balances.tmp");
+    std::fs::write(&old_colliding_temp, b"do not touch").unwrap();
+    populated_map().save(&first).unwrap();
+    populated_map().save(&second).unwrap();
+    assert_eq!(std::fs::read(&old_colliding_temp).unwrap(), b"do not touch");
+    assert!(BalanceMap::load_strict(&first).is_ok());
+    assert!(BalanceMap::load_strict(&second).is_ok());
 }

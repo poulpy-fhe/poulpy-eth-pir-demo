@@ -36,6 +36,45 @@ pub async fn apply_range<P: Provider>(
     apply_touched(provider, map, at, &touched, &mut out).await
 }
 
+/// Authoritative startup variant: strict event framing and strict Multicall
+/// decoding, with no publication side effects.
+pub async fn apply_range_strict<P: Provider>(
+    provider: &P,
+    map: &mut BalanceMap,
+    logs: &[Log],
+    from: u64,
+    to: u64,
+) -> Result<BatchStats> {
+    let mut touched = HashMap::new();
+    let collected = crate::chain::collect_touched_strict(logs, from..=to, &mut touched)?;
+    add_usdt_owner_touches_strict(provider, &mut touched, &collected.usdt_supply_blocks).await?;
+
+    let mut stats = BatchStats {
+        logs: logs.len(),
+        touched: touched.len(),
+        ..Default::default()
+    };
+    if touched.is_empty() {
+        return Ok(stats);
+    }
+    let addrs: Vec<Address> = touched.keys().copied().collect();
+    let readings = crate::chain::read_balances_strict(provider, &addrs, to).await?;
+    for addr in addrs {
+        let reading = readings
+            .get(&addr)
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("strict balance response omitted {addr}"))?;
+        match map.apply(addr, reading, touched[&addr]) {
+            Applied::Inserted => stats.inserted += 1,
+            Applied::Updated => stats.updated += 1,
+            Applied::Removed(_) => stats.removed += 1,
+            Applied::Unchanged => stats.unchanged += 1,
+            Applied::SkippedNewZero => stats.skipped_new_zero += 1,
+        }
+    }
+    Ok(stats)
+}
+
 struct ApplyOutputs<'a> {
     inserted: &'a mut HashSet<Address>,
     touched_out: &'a mut Vec<Address>,
@@ -61,6 +100,25 @@ async fn add_usdt_owner_touches<P: Provider>(
     for &block in blocks {
         let owner = crate::chain::usdt_owner(provider, block).await?;
         tracing::info!(%owner, block, "USDT supply event; refreshing the treasury balance");
+        touched
+            .entry(owner)
+            .or_default()
+            .see(crate::tokens::USDT, Some(block));
+    }
+    Ok(())
+}
+
+async fn add_usdt_owner_touches_strict<P: Provider>(
+    provider: &P,
+    touched: &mut HashMap<Address, Touch>,
+    blocks: &[u64],
+) -> Result<()> {
+    for &block in blocks {
+        let owner = crate::chain::usdt_owner_strict(provider, block).await?;
+        anyhow::ensure!(
+            !owner.is_zero(),
+            "USDT owner() returned zero at block {block}"
+        );
         touched
             .entry(owner)
             .or_default()

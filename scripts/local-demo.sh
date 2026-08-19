@@ -6,8 +6,7 @@ BACKEND_ADDR=${USDT_PIR_BACKEND_ADDR:-127.0.0.1:8787}
 PORTAL_ADDR=${USDT_PIR_PORTAL_ADDR:-127.0.0.1:8080}
 STATE=${USDT_PIR_STATE:-data/balances.snapshot}
 KEYWORD=${USDT_PIR_KEYWORD:-data/keyword}
-FROM_BLOCK=${USDT_PIR_FROM_BLOCK:-finalized}
-CONFIRMATIONS=${USDT_PIR_CONFIRMATIONS:-32}
+CONFIRMATIONS=${USDT_PIR_CONFIRMATIONS:-4}
 REBUILD_EVERY=${USDT_PIR_REBUILD_EVERY:-30}
 COMPACT_TAIL_PERCENT=${USDT_PIR_COMPACT_TAIL_PERCENT:-100}
 CHUNK=${USDT_PIR_CHUNK:-25}
@@ -15,6 +14,12 @@ ETH_RPC_URL=${ETH_RPC_URL:-https://rpc.ankr.com/eth}
 export ETH_RPC_URL
 
 cd "$ROOT"
+
+if [[ ! -e "$STATE" ]]; then
+  echo "required complete snapshot is missing: $STATE" >&2
+  echo "run 'usdt-pir bootstrap --state $STATE' with an archive mainnet RPC first" >&2
+  exit 1
+fi
 
 if [[ "${USDT_PIR_SKIP_BUILD:-0}" != "1" ]]; then
   RUSTFLAGS="${RUSTFLAGS:--C target-feature=+avx2,+fma}" \
@@ -32,10 +37,6 @@ backend_args=(
   --compact-tail-percent "$COMPACT_TAIL_PERCENT"
   --chunk "$CHUNK"
 )
-
-if [[ ! -e "$STATE" ]]; then
-  backend_args+=(--from-block "$FROM_BLOCK")
-fi
 
 cleanup() {
   jobs -pr | xargs -r kill

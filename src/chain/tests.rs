@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use alloy::primitives::{Address, B256, Bytes, keccak256};
+use alloy::primitives::{Address, B256, Bytes, address, keccak256};
 use alloy::rpc::types::eth::Log;
 
 use super::events::addr_from_word;
@@ -162,6 +162,18 @@ fn transfer_log_with_data(
     }
 }
 
+fn destroyed_log(token: Address, account: Address, block: u64) -> Log {
+    let mut data = Vec::with_capacity(64);
+    data.extend_from_slice(word(account).as_slice());
+    data.extend_from_slice(&nonzero_word());
+    Log {
+        inner: alloy::primitives::Log::new(token, vec![DESTROYED_BLACK_FUNDS], Bytes::from(data))
+            .unwrap(),
+        block_number: Some(block),
+        ..Default::default()
+    }
+}
+
 fn word(a: Address) -> B256 {
     let mut w = [0u8; 32];
     w[12..].copy_from_slice(a.as_slice());
@@ -172,4 +184,207 @@ fn nonzero_word() -> Vec<u8> {
     let mut v = vec![0u8; 32];
     v[31] = 1;
     v
+}
+
+#[test]
+fn strict_discovery_accepts_well_formed_transfer_and_special_events() {
+    let from = Address::repeat_byte(0x81);
+    let to = Address::repeat_byte(0x82);
+    let destroyed = Address::repeat_byte(0x83);
+    let mut transfer = transfer_log(USDT, from, to, 1_000);
+    transfer.block_hash = Some(B256::repeat_byte(1));
+    let mut destroyed_log = destroyed_log(USDT, destroyed, 1_001);
+    destroyed_log.block_hash = Some(B256::repeat_byte(2));
+    let mut issue = supply_log(USDT, ISSUE, 1_002);
+    issue.block_hash = Some(B256::repeat_byte(3));
+    let mut seen = HashMap::new();
+    let collected =
+        collect_touched_strict(&[transfer, destroyed_log, issue], 1_000..=1_002, &mut seen)
+            .unwrap();
+    assert_eq!(collected.understood, 3);
+    assert_eq!(collected.usdt_supply_blocks, vec![1_002]);
+    assert_eq!(seen[&from].usdt, Some(1_000));
+    assert_eq!(seen[&to].usdt, Some(1_000));
+    assert_eq!(seen[&destroyed].usdt, Some(1_001));
+}
+
+#[test]
+fn strict_destroyed_black_funds_requires_the_real_unindexed_usdt_shape() {
+    let account = Address::repeat_byte(0x84);
+    let mut valid = destroyed_log(USDT, account, 1_100);
+    valid.block_hash = Some(B256::repeat_byte(4));
+    let mut seen = HashMap::new();
+    collect_touched_strict(&[valid.clone()], 1_100..=1_100, &mut seen).unwrap();
+    assert_eq!(seen[&account].usdt, Some(1_100));
+
+    let old_incorrect_shape = Log {
+        inner: alloy::primitives::Log::new(
+            USDT,
+            vec![DESTROYED_BLACK_FUNDS, word(account)],
+            Bytes::from(nonzero_word()),
+        )
+        .unwrap(),
+        block_hash: valid.block_hash,
+        block_number: valid.block_number,
+        ..Default::default()
+    };
+    let mut truncated = valid.clone();
+    truncated.inner = alloy::primitives::Log::new(
+        USDT,
+        vec![DESTROYED_BLACK_FUNDS],
+        Bytes::from(vec![0u8; 63]),
+    )
+    .unwrap();
+    let mut unpadded = valid;
+    let mut unpadded_data = unpadded.data().data.to_vec();
+    unpadded_data[0] = 1;
+    unpadded.inner = alloy::primitives::Log::new(
+        USDT,
+        vec![DESTROYED_BLACK_FUNDS],
+        Bytes::from(unpadded_data),
+    )
+    .unwrap();
+
+    for malformed in [old_incorrect_shape, truncated, unpadded] {
+        let mut seen = HashMap::new();
+        assert!(collect_touched_strict(&[malformed], 1_100..=1_100, &mut seen).is_err());
+        assert!(seen.is_empty());
+    }
+}
+
+#[test]
+fn strict_discovery_rejects_removed_blockless_hashless_out_of_range_and_malformed_logs() {
+    let from = Address::repeat_byte(0x91);
+    let to = Address::repeat_byte(0x92);
+    let valid = || {
+        let mut log = transfer_log(USDC, from, to, 2_000);
+        log.block_hash = Some(B256::repeat_byte(4));
+        log
+    };
+    let mut cases = Vec::new();
+    let mut removed = valid();
+    removed.removed = true;
+    cases.push(removed);
+    let mut blockless = valid();
+    blockless.block_number = None;
+    cases.push(blockless);
+    let mut hashless = valid();
+    hashless.block_hash = None;
+    cases.push(hashless);
+    let mut outside = valid();
+    outside.block_number = Some(2_001);
+    cases.push(outside);
+    let mut malformed = valid();
+    malformed.inner = alloy::primitives::Log::new(
+        USDC,
+        vec![TRANSFER, word(from), word(to)],
+        Bytes::from(vec![1u8; 31]),
+    )
+    .unwrap();
+    cases.push(malformed);
+
+    for log in cases {
+        let mut seen = HashMap::new();
+        assert!(collect_touched_strict(&[log], 2_000..=2_000, &mut seen).is_err());
+        assert!(seen.is_empty());
+    }
+
+    let mut first = valid();
+    first.block_number = Some(1_999);
+    let mut malformed_last = valid();
+    malformed_last.block_hash = None;
+    let mut seen = HashMap::new();
+    assert!(collect_touched_strict(&[first, malformed_last], 1_999..=2_000, &mut seen).is_err());
+    assert!(
+        seen.is_empty(),
+        "a failed range must publish no partial touches"
+    );
+}
+
+#[test]
+fn strict_valid_inert_transfers_are_intentional_noops() {
+    let address = Address::repeat_byte(0xa1);
+    let mut zero = zero_transfer_log(USDT, address, Address::repeat_byte(0xa2), 3_000);
+    zero.block_hash = Some(B256::repeat_byte(5));
+    let mut self_transfer = transfer_log(USDT, address, address, 3_000);
+    self_transfer.block_hash = Some(B256::repeat_byte(5));
+    let mut seen = HashMap::new();
+    let collected =
+        collect_touched_strict(&[zero, self_transfer], 3_000..=3_000, &mut seen).unwrap();
+    assert_eq!(collected.understood, 2);
+    assert!(seen.is_empty());
+}
+
+/// Supplementary production-path smoke test. It is ignored so the ordinary
+/// suite remains deterministic and offline; run it explicitly with
+/// `ETH_RPC_URL` set.
+#[tokio::test]
+#[ignore = "requires ETH_RPC_URL and bounded mainnet archive access"]
+async fn live_mainnet_rpc_smoke_is_pinned_and_bounded() {
+    use alloy::providers::{Provider, ProviderBuilder};
+
+    let rpc = std::env::var("ETH_RPC_URL").expect("ETH_RPC_URL must be set");
+    let provider = live_result(ProviderBuilder::new().connect(&rpc).await);
+    live_result(ensure_mainnet(&provider).await);
+    let head = live_result(provider.get_block_number().await);
+    let target = confirmed_target(head, 4).unwrap();
+    assert!(live_result(block_hash(&provider, target).await).is_some());
+
+    const DESTROYED_REGRESSION_BLOCK: u64 = 22_719_557;
+    let destroyed_logs = live_result(
+        provider
+            .get_logs(&filter(
+                DESTROYED_REGRESSION_BLOCK,
+                DESTROYED_REGRESSION_BLOCK,
+            ))
+            .await,
+    )
+    .into_iter()
+    .filter(|log| log.address() == USDT && log.topics().first() == Some(&DESTROYED_BLACK_FUNDS))
+    .collect::<Vec<_>>();
+    assert_eq!(destroyed_logs.len(), 3);
+    let mut destroyed_accounts = HashMap::new();
+    let destroyed = live_result(collect_touched_strict(
+        &destroyed_logs,
+        DESTROYED_REGRESSION_BLOCK..=DESTROYED_REGRESSION_BLOCK,
+        &mut destroyed_accounts,
+    ));
+    assert_eq!(destroyed.understood, 3);
+    assert!(!destroyed_accounts.is_empty());
+
+    let logs = live_result(
+        provider
+            .get_logs(&filter(
+                crate::tokens::USDT_DEPLOY_BLOCK,
+                crate::tokens::USDT_DEPLOY_BLOCK,
+            ))
+            .await,
+    );
+    let mut touched = HashMap::new();
+    live_result(collect_touched_strict(
+        &logs,
+        crate::tokens::USDT_DEPLOY_BLOCK..=crate::tokens::USDT_DEPLOY_BLOCK,
+        &mut touched,
+    ));
+    live_result(crate::bootstrap::rpc_preflight(&provider, target, 0).await);
+    assert!(
+        live_result(usdt_owner_strict(&provider, crate::tokens::USDT_OWNER_PREFLIGHT_BLOCK).await)
+            == address!("0xc6cde7c39eb2f0f0095f41570af89efc2c1ea828")
+    );
+    let balances = live_result(
+        read_balances_strict(&provider, &[crate::tokens::USDT_INITIAL_OWNER], target).await,
+    );
+    assert_eq!(balances.len(), 1);
+    let supplies = live_result(read_total_supplies(&provider, target).await);
+    assert!(supplies.usdt > 0 && supplies.usdc > 0);
+    eprintln!("bounded mainnet smoke passed at public block {target}");
+}
+
+fn live_result<T, E: std::fmt::Display>(result: std::result::Result<T, E>) -> T {
+    result.unwrap_or_else(|error| {
+        panic!(
+            "live RPC smoke failed: {}",
+            crate::redact::urls(&error.to_string())
+        )
+    })
 }

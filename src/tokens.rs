@@ -8,6 +8,20 @@ pub const USDT: Address = address!("0xdAC17F958D2ee523a2206206994597C13D831ec7")
 /// Circle USD Coin, 6 decimals.
 pub const USDC: Address = address!("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48");
 
+/// First mainnet block containing the corresponding token contract.
+pub const USDT_DEPLOY_BLOCK: u64 = 4_634_748;
+pub const USDC_DEPLOY_BLOCK: u64 = 6_082_465;
+
+/// The constructor credited the entire initial USDT supply to this account
+/// without emitting a `Transfer`, so historical discovery has to seed it.
+pub const USDT_INITIAL_OWNER: Address = address!("0x36928500Bc1dCd7af6a2B4008875CC336b927D57");
+
+/// A verified mainnet block containing `Issue(uint256)`. Bootstrap preflight
+/// uses it to prove the RPC can read the historical `owner()` state needed by
+/// supply-event discovery, rather than discovering a pruned endpoint days into
+/// the scan.
+pub const USDT_OWNER_PREFLIGHT_BLOCK: u64 = 23_240_202;
+
 /// Multicall3, same address on every chain it is deployed to.
 pub const MULTICALL3: Address = address!("0xcA11bde05977b3631167028862bE2a173976CA11");
 

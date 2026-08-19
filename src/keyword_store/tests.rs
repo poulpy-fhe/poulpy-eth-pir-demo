@@ -133,3 +133,31 @@ fn paths_hang_off_one_base() {
     assert_eq!(paths.index, Path::new("data/keyword.index"));
     assert_eq!(paths.keys, Path::new("data/keyword.keys"));
 }
+
+#[test]
+fn restored_capacity_counts_retained_vacant_and_new_slots_like_restore() {
+    let base = tmp("dry-run");
+    let paths = Paths::new(&base);
+    let all = addresses(6);
+    let old = all[1..4].to_vec();
+    save_checkpoint(&paths, &checkpoint(old.clone(), 0)).unwrap();
+    let saved = load(&paths).unwrap().unwrap();
+    let map: crate::publish::PirSnapshot = [old[0], old[2], all[4], all[5]]
+        .into_iter()
+        .map(|address| {
+            (
+                address,
+                crate::map::Entry {
+                    usdt: 1,
+                    ..Default::default()
+                },
+            )
+        })
+        .collect();
+    let report = dry_run_allocation(&saved, &map, 5).unwrap();
+    assert_eq!(report.occupied, 2);
+    assert_eq!(report.vacant, 1);
+    assert_eq!(report.appended, 2);
+    assert_eq!(report.final_slots, 5);
+    assert!(dry_run_allocation(&saved, &map, 4).is_err());
+}

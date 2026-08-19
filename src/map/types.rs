@@ -16,7 +16,7 @@ impl Reading {
 
 pub use usdt_pir_record::Entry;
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct BalanceMap {
     pub(super) inner: HashMap<Address, Entry>,
     pub cursor: u64,
@@ -45,5 +45,9 @@ impl BalanceMap {
 
     pub fn iter(&self) -> impl Iterator<Item = (&Address, &Entry)> {
         self.inner.iter()
+    }
+
+    pub fn semantically_eq(&self, other: &Self) -> bool {
+        self.cursor == other.cursor && self.inner == other.inner
     }
 }

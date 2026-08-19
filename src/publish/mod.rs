@@ -32,6 +32,47 @@ type Ready = std::result::Result<EthPirResponder, String>;
 pub type UpdateBatch = Vec<(eth_pir::Address, Entry)>;
 pub type PirSnapshot = HashMap<eth_pir::Address, Entry>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AllocationReport {
+    pub occupied: usize,
+    pub vacant: usize,
+    pub appended: usize,
+    pub final_slots: usize,
+    pub capacity: usize,
+}
+
+pub fn capacity() -> usize {
+    let (config, layout) = eth_pir::default_shape();
+    layout.num_payloads(config.column_height())
+}
+
+/// Dry-run the same restored-keyword membership decisions made by
+/// `EthPirServer::restore`, without allocating the multi-gigabyte database.
+pub fn validate_initial_allocation(
+    map: &BalanceMap,
+    paths: &crate::keyword_store::Paths,
+) -> Result<AllocationReport> {
+    let values = snapshot(map);
+    let capacity = capacity();
+    match crate::keyword_store::load(paths)? {
+        Some(saved) => crate::keyword_store::dry_run_allocation(&saved, &values, capacity),
+        None => {
+            anyhow::ensure!(
+                values.len() <= capacity,
+                "{} holders exceed deployed PIR capacity {capacity}",
+                values.len()
+            );
+            Ok(AllocationReport {
+                occupied: 0,
+                vacant: 0,
+                appended: values.len(),
+                final_slots: values.len(),
+                capacity,
+            })
+        }
+    }
+}
+
 /// A running PIR server: the query handle, plus the thread that owns it.
 pub struct Pir {
     pub responder: EthPirResponder,

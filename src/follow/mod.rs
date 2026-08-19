@@ -7,10 +7,11 @@ mod loop_run;
 mod syncer;
 mod watch;
 
-pub use apply::apply_range;
+pub use apply::{apply_range, apply_range_strict};
 pub use config::{FollowConfig, SyncStats};
+pub use logs::is_result_cap_message;
 pub use loop_run::{PassState, run};
-pub use syncer::{preflight, sync, sync_into};
+pub use syncer::{preflight, sync, sync_into, sync_startup};
 
 #[cfg(test)]
 mod tests;

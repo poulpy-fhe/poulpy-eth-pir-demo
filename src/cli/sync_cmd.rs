@@ -9,6 +9,10 @@ use crate::follow::FollowConfig;
 use crate::map::BalanceMap;
 
 pub async fn run(cmd: Cmd) -> Result<()> {
+    run_inner(cmd).await.map_err(crate::redact::error)
+}
+
+async fn run_inner(cmd: Cmd) -> Result<()> {
     let Cmd::Sync {
         rpc,
         state,
@@ -21,6 +25,7 @@ pub async fn run(cmd: Cmd) -> Result<()> {
     else {
         unreachable!("sync_cmd only handles sync")
     };
+    let state = crate::bootstrap::normalize_path(&state)?;
     let provider = ProviderBuilder::new().connect(&rpc).await?;
     let _lock = crate::map::SnapshotLock::acquire(&state)?;
     let to = to.resolve(&provider).await?;
@@ -136,7 +141,8 @@ async fn wait_to_retry(
         cursor = balances.cursor,
         remaining = to.saturating_sub(balances.cursor),
         retry_in = ?cfg.retry_base,
-        "sync interrupted: {error:#}"
+        "sync interrupted: {}",
+        crate::redact::urls(&format!("{error:#}"))
     );
     tokio::time::sleep(cfg.retry_base).await;
     Ok(())

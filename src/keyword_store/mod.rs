@@ -48,6 +48,68 @@ pub struct Loaded {
     pub version: u64,
 }
 
+pub fn dry_run_allocation(
+    saved: &Loaded,
+    map: &crate::publish::PirSnapshot,
+    deployed_capacity: usize,
+) -> Result<crate::publish::AllocationReport> {
+    let mut wire = &saved.directory[..];
+    let directory = poulpy_pir::keyword::KeywordDirectory::<20>::read_from(&mut wire)
+        .context("parsing the saved keyword directory for capacity validation")?;
+    anyhow::ensure!(
+        wire.is_empty(),
+        "saved keyword directory has trailing bytes"
+    );
+    let mphf_len = directory.mphf().len();
+    anyhow::ensure!(
+        saved.keys.len() == mphf_len,
+        "saved keyword checkpoint has {} keys for {mphf_len} MPHF slots",
+        saved.keys.len()
+    );
+    anyhow::ensure!(
+        directory.len() <= deployed_capacity,
+        "saved keyword directory already addresses {} slots, beyond deployed PIR capacity {deployed_capacity}",
+        directory.len()
+    );
+
+    let mut occupied = 0usize;
+    let mut appended = 0usize;
+    for address in map.keys() {
+        let slot = directory.index(address);
+        let restored = if slot < mphf_len {
+            saved.keys.get(slot) == Some(address)
+        } else {
+            // Only exact delta members resolve beyond the MPHF range.
+            slot < directory.len()
+        };
+        if restored {
+            occupied = occupied
+                .checked_add(1)
+                .context("occupied slot count overflow")?;
+        } else {
+            appended = appended
+                .checked_add(1)
+                .context("appended slot count overflow")?;
+        }
+    }
+    let final_slots = directory
+        .len()
+        .checked_add(appended)
+        .context("initial keyword slot count overflow")?;
+    anyhow::ensure!(
+        appended <= directory.remaining_capacity() && final_slots <= deployed_capacity,
+        "restored keyword allocation needs {final_slots} slots ({} retained plus {appended} appended), capacity is {deployed_capacity}",
+        directory.len()
+    );
+    Ok(crate::publish::AllocationReport {
+        occupied,
+        vacant: directory.len().saturating_sub(occupied),
+        appended,
+        final_slots,
+        capacity: deployed_capacity,
+    })
+}
+
 /// Both halves, or `None` if either is missing.
 ///
 /// A version mismatch means the `.keys` file belongs to an older MPHF than the

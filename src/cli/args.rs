@@ -60,9 +60,38 @@ impl Target {
 
 #[derive(Subcommand)]
 pub enum Cmd {
+    /// Discover every historical USDT/USDC candidate and build one complete snapshot.
+    Bootstrap {
+        #[arg(long, env = "ETH_RPC_URL", hide_env_values = true)]
+        rpc: String,
+        #[arg(long, default_value_t = 4, value_parser = clap::value_parser!(u64).range(1..))]
+        confirmations: u64,
+        #[arg(long, default_value = DEFAULT_STATE)]
+        state: PathBuf,
+        /// Intermediate crash-recovery cache. Defaults to `<state>.bootstrap.sqlite`.
+        #[arg(long)]
+        cache: Option<PathBuf>,
+        #[arg(long, default_value_t = 10_000, value_parser = clap::value_parser!(u64).range(1..))]
+        chunk: u64,
+        /// Additional attempts after the initial failure of one stalled unit.
+        #[arg(long, default_value_t = 10)]
+        retries: u32,
+        /// Keep a completed SQLite cache for diagnostics.
+        #[arg(long)]
+        keep_cache: bool,
+    },
+    /// Atomically install a staged, checksummed snapshot for `serve`.
+    InstallSnapshot {
+        /// Staged snapshot file (it may be on another filesystem).
+        #[arg(long)]
+        source: PathBuf,
+        /// Final serving-state destination.
+        #[arg(long, default_value = DEFAULT_STATE)]
+        state: PathBuf,
+    },
     /// Follow the chain, folding every balance-moving event into the map.
     Follow {
-        #[arg(long, env = "ETH_RPC_URL")]
+        #[arg(long, env = "ETH_RPC_URL", hide_env_values = true)]
         rpc: String,
         #[arg(long, default_value = DEFAULT_STATE)]
         state: PathBuf,
@@ -81,7 +110,7 @@ pub enum Cmd {
     },
     /// Sync a bounded block range into the map, then exit.
     Sync {
-        #[arg(long, env = "ETH_RPC_URL")]
+        #[arg(long, env = "ETH_RPC_URL", hide_env_values = true)]
         rpc: String,
         #[arg(long, default_value = DEFAULT_STATE)]
         state: PathBuf,
@@ -100,7 +129,7 @@ pub enum Cmd {
     },
     /// Follow the chain and keep a PIR database current from it.
     Serve {
-        #[arg(long, env = "ETH_RPC_URL")]
+        #[arg(long, env = "ETH_RPC_URL", hide_env_values = true)]
         rpc: String,
         #[arg(long, default_value = DEFAULT_STATE)]
         state: PathBuf,
@@ -110,7 +139,7 @@ pub enum Cmd {
         chunk: u64,
         #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(1..))]
         snapshot_every: u64,
-        #[arg(long, default_value = "32")]
+        #[arg(long, default_value = "4")]
         confirmations: crate::chain::Tip,
         #[arg(long, default_value_t = 64, value_parser = clap::value_parser!(u64).range(1..))]
         reorg_window: u64,
@@ -173,4 +202,70 @@ pub enum Cmd {
         #[arg(long, default_value = DEFAULT_STATE)]
         state: PathBuf,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn bootstrap_defaults_are_one_shot_defaults() {
+        let cli =
+            Cli::try_parse_from(["usdt-pir", "bootstrap", "--rpc", "http://localhost"]).unwrap();
+        let Cmd::Bootstrap {
+            confirmations,
+            state,
+            cache,
+            chunk,
+            retries,
+            keep_cache,
+            ..
+        } = cli.cmd
+        else {
+            panic!("wrong command")
+        };
+        assert_eq!(confirmations, 4);
+        assert_eq!(state, PathBuf::from(DEFAULT_STATE));
+        assert_eq!(cache, None);
+        assert_eq!(chunk, 10_000);
+        assert_eq!(retries, 10);
+        assert!(!keep_cache);
+    }
+
+    #[test]
+    fn bootstrap_refuses_zero_confirmation_depth() {
+        assert!(
+            Cli::try_parse_from([
+                "usdt-pir",
+                "bootstrap",
+                "--rpc",
+                "http://localhost",
+                "--confirmations",
+                "0",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn serve_numeric_confirmation_default_is_four() {
+        let cli = Cli::try_parse_from(["usdt-pir", "serve", "--rpc", "http://localhost"]).unwrap();
+        let Cmd::Serve { confirmations, .. } = cli.cmd else {
+            panic!("wrong command")
+        };
+        assert_eq!(confirmations, crate::chain::Tip::Confirmations(4));
+    }
+
+    #[test]
+    fn help_never_renders_rpc_environment_values() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("bootstrap")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+        assert!(help.contains("ETH_RPC_URL"));
+        assert!(!help.contains("ETH_RPC_URL="));
+    }
 }

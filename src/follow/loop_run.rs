@@ -62,10 +62,11 @@ fn snapshot_failed_progress(map: &BalanceMap, cfg: &FollowConfig, last_snapshot:
 }
 
 fn log_failure(map: &BalanceMap, failures: u32, retry_delay: Duration, error: &anyhow::Error) {
+    let error = crate::redact::urls(&format!("{error:#}"));
     if failures >= 5 {
-        tracing::error!(failures, cursor = map.cursor, retry_in = ?retry_delay, "sync pass still failing: {error:#}");
+        tracing::error!(failures, cursor = map.cursor, retry_in = ?retry_delay, "sync pass still failing: {error}");
     } else {
-        tracing::warn!(failures, cursor = map.cursor, retry_in = ?retry_delay, "sync pass failed: {error:#}");
+        tracing::warn!(failures, cursor = map.cursor, retry_in = ?retry_delay, "sync pass failed: {error}");
     }
 }
 

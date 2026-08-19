@@ -9,6 +9,19 @@ use crate::map::BalanceMap;
 
 pub async fn run(cli: Cli) -> Result<()> {
     match cli.cmd {
+        cmd @ Cmd::Bootstrap { .. } => crate::cli::bootstrap_cmd::run(cmd).await,
+        Cmd::InstallSnapshot { source, state } => {
+            let source = crate::bootstrap::normalize_path(&source)?;
+            let state = crate::bootstrap::normalize_path(&state)?;
+            let installed = crate::map::install_snapshot(&source, &state)?;
+            println!(
+                "installed verified snapshot at {:?}: cursor {}, {} holders",
+                state,
+                installed.cursor,
+                installed.len()
+            );
+            Ok(())
+        }
         cmd @ Cmd::Follow { .. } => crate::cli::follow_cmd::run(cmd).await,
         cmd @ Cmd::Sync { .. } => crate::cli::sync_cmd::run(cmd).await,
         cmd @ Cmd::Serve { .. } => crate::cli::serve_cmd::run(cmd).await,

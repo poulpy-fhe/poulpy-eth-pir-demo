@@ -10,11 +10,18 @@ fn tip_parses_confirmations_and_finalized() {
     assert_eq!("finalized".parse(), Ok(Tip::Finalized));
     assert_eq!("FINALIZED".parse(), Ok(Tip::Finalized));
     assert_eq!("32".parse(), Ok(Tip::Confirmations(32)));
-    assert_eq!("0".parse(), Ok(Tip::Confirmations(0)));
+    assert!("0".parse::<Tip>().is_err());
     assert!("latest".parse::<Tip>().is_err());
     assert!("-1".parse::<Tip>().is_err());
     assert!(!Tip::Finalized.is_reorgable());
     assert!(Tip::Confirmations(64).is_reorgable());
+}
+
+#[test]
+fn numeric_confirmation_targets_are_positive_checked_subtractions() {
+    assert_eq!(crate::chain::confirmed_target(100, 4).unwrap(), 96);
+    assert!(crate::chain::confirmed_target(100, 0).is_err());
+    assert!(crate::chain::confirmed_target(3, 4).is_err());
 }
 
 #[test]

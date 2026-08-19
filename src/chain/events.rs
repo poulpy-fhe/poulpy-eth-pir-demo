@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ops::RangeInclusive;
 
 use alloy::primitives::Address;
 use alloy::rpc::types::eth::{Filter, Log};
@@ -68,6 +69,155 @@ pub fn collect_touched(logs: &[Log], out: &mut HashMap<Address, Touch>) -> Colle
     collected.usdt_supply_blocks.sort_unstable();
     collected.usdt_supply_blocks.dedup();
     collected
+}
+
+/// Strict projection used while assembling authoritative state. A response
+/// that matched our RPC filter but cannot be proved to be a well-formed event
+/// fails the whole range, so its durable cursor cannot move past it.
+pub fn collect_touched_strict(
+    logs: &[Log],
+    range: RangeInclusive<u64>,
+    out: &mut HashMap<Address, Touch>,
+) -> anyhow::Result<Collected> {
+    let mut collected = Collected::default();
+    let mut pending = HashMap::new();
+    for (index, log) in logs.iter().enumerate() {
+        collect_log_strict(log, range.clone(), &mut pending, &mut collected)
+            .map_err(|e| anyhow::anyhow!("matched log {index} is invalid: {e}"))?;
+    }
+    for (address, touch) in pending {
+        let entry = out.entry(address).or_default();
+        entry.see(USDT, touch.usdt);
+        entry.see(USDC, touch.usdc);
+    }
+    collected.usdt_supply_blocks.sort_unstable();
+    collected.usdt_supply_blocks.dedup();
+    Ok(collected)
+}
+
+fn collect_log_strict(
+    log: &Log,
+    range: RangeInclusive<u64>,
+    out: &mut HashMap<Address, Touch>,
+    collected: &mut Collected,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        TOKENS.contains(&log.address()),
+        "unexpected token {}",
+        log.address()
+    );
+    anyhow::ensure!(!log.removed, "log is marked removed");
+    let block = log
+        .block_number
+        .ok_or_else(|| anyhow::anyhow!("missing block number"))?;
+    anyhow::ensure!(range.contains(&block), "block {block} is outside {range:?}");
+    anyhow::ensure!(
+        log.block_hash.is_some(),
+        "missing block hash at block {block}"
+    );
+
+    let topics = log.topics();
+    let topic0 = topics
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("missing event signature topic"))?;
+    anyhow::ensure!(
+        WATCHED_TOPICS.contains(topic0),
+        "unexpected event signature {topic0}"
+    );
+    match *topic0 {
+        TRANSFER => collect_transfer_strict(log, block, out)?,
+        DESTROYED_BLACK_FUNDS => collect_destroyed_strict(log, block, out)?,
+        topic if SUPPLY_TOPICS.contains(&topic) => collect_supply_strict(log, block, collected)?,
+        _ => unreachable!("WATCHED_TOPICS is exhaustive"),
+    }
+    collected.understood += 1;
+    Ok(())
+}
+
+fn collect_transfer_strict(
+    log: &Log,
+    block: u64,
+    out: &mut HashMap<Address, Touch>,
+) -> anyhow::Result<()> {
+    let topics = log.topics();
+    anyhow::ensure!(
+        topics.len() == 3,
+        "Transfer has {} topics, expected 3",
+        topics.len()
+    );
+    anyhow::ensure!(
+        log.data().data.len() == 32,
+        "Transfer has {} data bytes, expected 32",
+        log.data().data.len()
+    );
+    let from = strict_addr_word(topics[1].as_slice())?;
+    let to = strict_addr_word(topics[2].as_slice())?;
+    if log.data().data.iter().all(|byte| *byte == 0) || from == to {
+        return Ok(());
+    }
+    for address in [from, to] {
+        if !address.is_zero() {
+            out.entry(address)
+                .or_default()
+                .see(log.address(), Some(block));
+        }
+    }
+    Ok(())
+}
+
+fn collect_destroyed_strict(
+    log: &Log,
+    block: u64,
+    out: &mut HashMap<Address, Touch>,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        log.address() == USDT,
+        "DestroyedBlackFunds is only supported for USDT"
+    );
+    let topics = log.topics();
+    anyhow::ensure!(
+        topics.len() == 1,
+        "DestroyedBlackFunds has {} topics, expected 1",
+        topics.len()
+    );
+    let data = &log.data().data;
+    anyhow::ensure!(
+        data.len() == 64,
+        "DestroyedBlackFunds has {} data bytes, expected 64",
+        data.len()
+    );
+    // USDT declares both arguments as non-indexed. The first data word is the
+    // destroyed account and the complete second word is its former balance.
+    let address = strict_addr_word(&data[..32])?;
+    if !address.is_zero() {
+        out.entry(address).or_default().see(USDT, Some(block));
+    }
+    Ok(())
+}
+
+fn collect_supply_strict(log: &Log, block: u64, collected: &mut Collected) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        log.address() == USDT,
+        "Issue/Redeem is only supported for USDT"
+    );
+    anyhow::ensure!(
+        log.topics().len() == 1,
+        "Issue/Redeem has {} topics, expected 1",
+        log.topics().len()
+    );
+    anyhow::ensure!(
+        log.data().data.len() == 32,
+        "Issue/Redeem has {} data bytes, expected 32",
+        log.data().data.len()
+    );
+    collected.usdt_supply_blocks.push(block);
+    Ok(())
+}
+
+fn strict_addr_word(word: &[u8]) -> anyhow::Result<Address> {
+    anyhow::ensure!(word.len() == 32, "address topic is not 32 bytes");
+    anyhow::ensure!(word[..12] == [0u8; 12], "address topic is not left padded");
+    Ok(Address::from_slice(&word[12..]))
 }
 
 fn collect_log(log: &Log, out: &mut HashMap<Address, Touch>, collected: &mut Collected) {

@@ -74,6 +74,37 @@ pub async fn sync<P: Provider>(
     Ok(totals)
 }
 
+/// Catch up an authoritative startup map entirely in memory. It deliberately
+/// never snapshots: the caller commits only after target-pinned validation.
+pub async fn sync_startup<P: Provider>(
+    provider: &P,
+    map: &mut BalanceMap,
+    target: u64,
+    configured_chunk: u64,
+) -> Result<SyncStats> {
+    anyhow::ensure!(configured_chunk > 0, "startup chunk must be positive");
+    let origin = map.cursor;
+    let mut totals = SyncStats::default();
+    let mut chunk = configured_chunk;
+    let mut lo = map
+        .cursor
+        .checked_add(1)
+        .ok_or_else(|| anyhow::anyhow!("snapshot cursor cannot advance past u64::MAX"))?;
+    while lo <= target {
+        let wanted = lo.saturating_add(chunk - 1).min(target);
+        let (logs, hi) =
+            crate::follow::logs::fetch_logs_strict(provider, lo, wanted, &mut chunk).await?;
+        let stats = crate::follow::apply_range_strict(provider, map, &logs, lo, hi).await?;
+        map.cursor = hi;
+        totals.fold(stats);
+        lo = hi
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("startup range ended at u64::MAX"))?;
+    }
+    totals.blocks = map.cursor.saturating_sub(origin);
+    Ok(totals)
+}
+
 /// [`sync`] accumulating into a caller-owned total, so a caller that retries can
 /// report the whole range instead of only the attempt that happened to finish.
 ///

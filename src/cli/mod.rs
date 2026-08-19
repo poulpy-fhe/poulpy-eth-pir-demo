@@ -1,4 +1,5 @@
 mod args;
+mod bootstrap_cmd;
 mod commands;
 mod follow_cmd;
 mod inspect;
