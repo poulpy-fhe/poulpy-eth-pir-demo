@@ -174,7 +174,7 @@ async function run() {
   $('go').disabled = true;
   $('result').hidden = true;
   try {
-    const status = await session.ensureCurrent();
+    const status = await session.sync(say);
     showDirectory(status);
     const { report, timings, sizes } = await session.lookup(address, say);
     show(report, timings, sizes);
