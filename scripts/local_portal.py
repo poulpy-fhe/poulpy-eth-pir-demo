@@ -49,7 +49,12 @@ class Portal(http.server.SimpleHTTPRequestHandler):
     def proxy(self) -> None:
         target = urlsplit(self.backend)
         body = self.read_body()
-        conn = http.client.HTTPConnection(target.hostname, target.port, timeout=300)
+        connection = (
+            http.client.HTTPSConnection
+            if target.scheme == "https"
+            else http.client.HTTPConnection
+        )
+        conn = connection(target.hostname, target.port, timeout=300)
         try:
             conn.request(self.command, self.path, body=body, headers=self.forward_headers())
             response = conn.getresponse()
@@ -80,13 +85,21 @@ class Portal(http.server.SimpleHTTPRequestHandler):
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--listen", type=parse_addr, default=("127.0.0.1", 8080))
-    parser.add_argument("--backend", default="http://127.0.0.1:8787")
+    parser.add_argument(
+        "--backend",
+        default="http://127.0.0.1:8787",
+        help="PIR API origin (http:// or https://; the port is optional)",
+    )
     parser.add_argument("--web", type=Path, default=Path("client/web"))
     args = parser.parse_args()
 
-    backend = urlsplit(args.backend)
-    if backend.scheme != "http" or backend.hostname is None or backend.port is None:
-        raise SystemExit("--backend must be an http://HOST:PORT URL")
+    try:
+        backend = urlsplit(args.backend)
+        backend.port
+    except ValueError as error:
+        raise SystemExit(f"invalid --backend URL: {error}") from error
+    if backend.scheme not in {"http", "https"} or backend.hostname is None:
+        raise SystemExit("--backend must be an http:// or https:// URL")
 
     Portal.backend = args.backend.rstrip("/")
     handler = functools.partial(Portal, directory=str(args.web))
