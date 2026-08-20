@@ -9,6 +9,7 @@ cd "$root"
 required=(
   client/web/index.html
   client/web/pir.js
+  client/web/poulpy.png
   client/web/usdt_pir_client.js
   client/web/usdt_pir_client_bg.wasm
 )
