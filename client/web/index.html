@@ -67,6 +67,16 @@
           color: var(--muted); font-size: .82rem; font-family: var(--mono); }
   .meta div { display: flex; justify-content: space-between; gap: 1rem; }
   footer { margin-top: 2rem; color: var(--muted); font-size: .85rem; }
+  .attribution { display: flex; justify-content: flex-end; margin: 1.25rem 0 0; }
+  .attribution-link {
+    display: inline-flex; align-items: center; gap: .5rem; color: var(--muted);
+    text-decoration: none;
+  }
+  .attribution-link:hover .attribution-name { text-decoration: underline; }
+  .attribution-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  .attribution-logo { width: 2rem; height: 2rem; flex: none; }
+  .attribution-name { color: var(--accent); font-weight: 600; }
+  @media (max-width: 32rem) { .attribution { justify-content: flex-start; } }
   code { font-family: var(--mono); font-size: .85em; }
   a { color: var(--accent); }
 </style>
@@ -112,6 +122,13 @@
       The server's answer is checked against the address you asked for, so a
       wrong record is rejected rather than displayed.
     </p>
+    <div class="attribution">
+      <a class="attribution-link" href="https://github.com/poulpy-fhe/poulpy-pir"
+         target="_blank" rel="noopener noreferrer">
+        <img class="attribution-logo" src="./poulpy.png" alt="" width="32" height="32">
+        <span>Built with <span class="attribution-name">poulpy-pir</span></span>
+      </a>
+    </div>
   </footer>
 </main>
 
